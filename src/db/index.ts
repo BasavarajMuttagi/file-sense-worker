@@ -1,11 +1,22 @@
+import { createClient } from "@libsql/client/web";
 import { drizzle } from "drizzle-orm/libsql";
-import "dotenv/config";
+import { relations } from "./schema";
 
-const db = drizzle({
-  connection: {
-    url: process.env.DATABASE_URL,
-    authToken: process.env.TOKEN,
-  },
-});
+let cachedDb: ReturnType<typeof drizzle<typeof relations>> | null = null;
+let cachedUrl: string | null = null;
 
-export default db;
+export function getDb(env: { DATABASE_URL: string; TOKEN: string }) {
+  if (cachedDb && cachedUrl === env.DATABASE_URL) {
+    return cachedDb;
+  }
+  const client = createClient({
+    url: env.DATABASE_URL,
+    authToken: env.TOKEN,
+  });
+  cachedDb = drizzle({ client, relations });
+  cachedUrl = env.DATABASE_URL;
+  return cachedDb;
+}
+
+export * from "./schema";
+export default getDb;
