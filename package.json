@@ -1,0 +1,25 @@
+{
+  "name": "cloudflare-workers-openapi",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@hono/clerk-auth": "^3.1.1",
+    "@libsql/client": "^0.18.0",
+    "@tigrisdata/storage": "^3.21.0",
+    "@upstash/vector": "^1.2.3",
+    "drizzle-orm": "^1.0.0-rc.4",
+    "hono": "^4.12.12",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.5",
+    "drizzle-kit": "^1.0.0-rc.4",
+    "wrangler": "^4.129.0"
+  }
+}
