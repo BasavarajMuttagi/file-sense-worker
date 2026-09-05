@@ -5,14 +5,22 @@ export interface TigrisEnv {
   TIGRIS_STORAGE_SECRET_ACCESS_KEY?: string;
   TIGRIS_STORAGE_ENDPOINT?: string;
   TIGRIS_BUCKET_NAME?: string;
+  TIGRIS_STORAGE_BUCKET?: string;
 }
 
 export function getTigrisConfig(env: TigrisEnv) {
+  const bucket =
+    env.TIGRIS_STORAGE_BUCKET ||
+    env.TIGRIS_BUCKET_NAME ||
+    "filesense-bucket";
+  const endpoint =
+    env.TIGRIS_STORAGE_ENDPOINT || "https://t3.storage.dev";
+
   return {
     accessKeyId: env.TIGRIS_STORAGE_ACCESS_KEY_ID ?? "",
     secretAccessKey: env.TIGRIS_STORAGE_SECRET_ACCESS_KEY ?? "",
-    endpoint: env.TIGRIS_STORAGE_ENDPOINT ?? "https://t3.storage.dev",
-    bucket: env.TIGRIS_BUCKET_NAME ?? "filesense",
+    endpoint,
+    bucket,
   };
 }
 

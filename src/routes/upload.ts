@@ -16,7 +16,9 @@ uploadRoute.post("/", async (c) => {
     throw new HTTPException(401, { message: "Unauthorized" });
   }
 
-  const body: unknown = await c.req.json().catch(() => null);
+  const queryProjectId = c.req.query("projectId");
+  const rawBody: unknown = await c.req.json().catch(() => ({}));
+  const body = typeof rawBody === "object" && rawBody !== null ? { projectId: queryProjectId, ...rawBody } : { projectId: queryProjectId };
   const parsed = uploadSchema.safeParse(body);
   if (!parsed.success) {
     throw new HTTPException(400, {
@@ -62,6 +64,7 @@ uploadRoute.post("/", async (c) => {
 
   const uploadResult = await handleClientUpload(
     modifiedBody as unknown as Parameters<typeof handleClientUpload>[0],
+    tigrisConfig,
   );
   if (uploadResult.error) {
     throw new HTTPException(500, { message: uploadResult.error.message });
@@ -71,6 +74,9 @@ uploadRoute.post("/", async (c) => {
   return c.json({
     success: true,
     url: uploadData?.url,
+    data: {
+      url: uploadData?.url,
+    },
     storagePath,
   });
 });
