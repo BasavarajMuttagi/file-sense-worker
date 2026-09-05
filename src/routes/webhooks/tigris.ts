@@ -53,7 +53,16 @@ webhooks.post("/", async (c) => {
         continue;
       }
 
-      if (event.eventName === "OBJECT_DELETED") {
+      const eventName = (event.eventName ?? "").toUpperCase();
+      const isDelete =
+        eventName === "OBJECT_DELETED" ||
+        eventName.includes("DELETE") ||
+        eventName.includes("REMOVED");
+      const isCreate =
+        eventName.startsWith("OBJECT_CREATED") ||
+        eventName.includes("OBJECTCREATED");
+
+      if (isDelete) {
         const [doc] = await db
           .select({ id: documents.id })
           .from(documents)
@@ -72,10 +81,7 @@ webhooks.post("/", async (c) => {
         continue;
       }
 
-      if (
-        event.eventName !== "OBJECT_CREATED_PUT" &&
-        event.eventName !== "OBJECT_CREATED_MULTIPART"
-      ) {
+      if (!isCreate) {
         continue;
       }
 
