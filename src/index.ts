@@ -34,22 +34,7 @@ app.route("/api/upload", uploadRoute);
 app.route("/webhooks/tigris", webhooksRoute);
 app.route("/queries", queriesRoute);
 
-app.get("/", (c) =>
-  c.json({
-    name: "FileSense API (Cloudflare Worker)",
-    version: "1.0.0",
-    endpoints: {
-      health: "GET /health",
-      projects:
-        "GET /projects, POST /projects, GET /projects/:id, GET /projects/:id/documents, DELETE /projects/:id",
-      documents:
-        "GET /documents/:id, GET /documents/project/:projectId, DELETE /documents/:id",
-      upload: "POST /api/upload",
-      queries: "POST /queries, GET /queries, GET /queries/:id",
-      webhook: "POST /webhooks/tigris",
-    },
-  }),
-);
+app.get("/", (c) => c.text("File Sense!"));
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 
