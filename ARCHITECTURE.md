@@ -30,8 +30,9 @@ flowchart TB
         Mistral["Mistral AI (mistral-medium-3-5)"]
     end
 
-    subgraph ComputeLayer["Background Compute (External)"]
-        DocAI["Document Digitize & OCR (e.g. Sarvam AI)"]
+    subgraph ComputeLayer["Serverless Compute Sandbox (Upstash Box)"]
+        Box["Upstash Box (2 vCPU, 4GB RAM)"]
+        DocAI["Sarvam Doc AI (OCR)"]
         Chunker["Text Chunker & Embedding Pipeline"]
     end
 
@@ -42,9 +43,11 @@ flowchart TB
     Router -->|Vector Search & Deletions| Upstash
     Router -->|Synthesize Answers| Mistral
     Tigris -->|S3 Webhook Events| Router
-    ComputeLayer -.->|Read Raw Files| Tigris
-    ComputeLayer -.->|Upsert Chunks| Upstash
-    ComputeLayer -.->|Update Document Status| Turso
+    Router -.->|waitUntil: Trigger Job| Box
+    Box -.->|Download via Presigned GET| Tigris
+    Box -.->|Run OCR| DocAI
+    Box -.->|Upsert Chunks| Upstash
+    Box -.->|UPDATE status = processed| Turso
 ```
 
 ---
@@ -59,6 +62,7 @@ flowchart TB
 | **Database** | [Turso](https://turso.tech/) (LibSQL) | Distributed SQLite at the edge |
 | **ORM** | [Drizzle ORM](https://orm.drizzle.team/) (`v1-rc`) | Type-safe SQL builder with zero runtime overhead |
 | **Object Storage** | [Tigris Data](https://www.tigrisdata.com/) (`@tigrisdata/storage`) | Globally distributed S3-compatible object storage with event webhooks |
+| **Compute Sandbox** | [Upstash Box](https://upstash.com/docs/box) (`@upstash/box`) | Serverless on-demand Linux container (2 vCPU, 4GB RAM) for heavy OCR & chunking |
 | **Vector Database** | [Upstash Vector](https://upstash.com/docs/vector/overall) | Serverless vector database with built-in embeddings and metadata filtering |
 | **Validation** | [Zod](https://zod.dev/) | Request body, query string, and route parameter validation |
 | **LLM Inference** | Mistral AI (`mistral-medium-3-5`) | Single, fixed frontier LLM for grounded answer synthesis |
@@ -82,7 +86,9 @@ file-sense-worker/
 │   │   └── webhooks/
 │   │       └── tigris.ts        # Ingestion webhook for Tigris S3 object events
 │   ├── services/
-│   │   ├── storage.ts           # Tigris storage configuration and removal utilities
+│   │   ├── box.ts               # Upstash Box connection and job dispatching
+│   │   ├── pipeline-runner.ts   # Self-contained Node.js OCR & chunking runner template
+│   │   ├── storage.ts           # Tigris storage configuration, presigned URLs, and removal utilities
 │   │   └── vector.ts            # Upstash Vector client initialization and caching
 │   └── validators/
 │       ├── project.ts           # Zod validation schemas for project endpoints
@@ -123,7 +129,7 @@ Metadata for individual files uploaded to Tigris storage.
 - `fileSize` (`integer`, not null) — File size in bytes
 - `storageUrl` (`text`, nullable) — S3 key / Tigris storage path
 - `chunkCount` (`integer`, default 0) — Number of indexed chunks
-- `status` (`text`: `"created" | "processed" | "error"`, indexed)
+- `status` (`text`: `"created" | "processing" | "processed" | "error"`, indexed)
 - `createdAt` (`timestamp`, indexed)
 - `updatedAt` (`timestamp`)
 
@@ -226,12 +232,24 @@ sequenceDiagram
     %% Step 3: Tigris triggers S3 Webhook
     Tigris->>Webhook: POST /webhooks/tigris (OBJECT_CREATED_PUT)
     Webhook->>Turso: Verify project exists & doc not duplicated
-    Webhook->>Turso: INSERT document (status: "created", fileSize, mimeType, storageUrl)
+    Webhook->>Turso: INSERT document (status: "processing", fileSize, mimeType, storageUrl)
+    Webhook->>Tigris: Generate presigned GET download URL
+    Webhook->>Webhook: executionCtx.waitUntil(dispatchDocumentProcessing)
     Webhook-->>Tigris: 200 OK { status: "processed" }
 
-    %% Step 4: External Compute
-    Note over Compute: External service picks up "created" documents,<br/>runs OCR (Sarvam), chunks text, and upserts to Upstash Vector.
-    Compute->>Turso: UPDATE document SET status = "processed", chunkCount = N
+    %% Step 4: Upstash Box Execution
+    Note over Box: Upstash Box wakes from auto-freeze (2 vCPU, 4GB RAM)
+    Webhook->>Box: box.exec.command("node pipeline-runner.mjs job.json")
+    Box->>Tigris: Download file via presigned URL
+    alt Sarvam API Key Present
+        Box->>Sarvam: POST /digitise -> poll status -> extract pages
+    else Local Fallback
+        Box->>Box: Native PDF stream inflate & token extraction
+    end
+    Box->>Box: Chunk text (400 tokens, 50 overlap)
+    Box->>Upstash: POST /upsert (chunks with metadata)
+    Box->>Turso: UPDATE documents SET status = "processed", chunkCount = N
+    Note over Box: Container auto-freezes when idle ($0 idle cost)
 ```
 
 ---
@@ -326,6 +344,8 @@ All environment variables and secrets are accessed in Hono handlers via `c.env`:
 | `UPSTASH_VECTOR_REST_TOKEN` | Upstash Vector REST authentication token |
 | `MISTRAL_API_KEY` | Mistral AI API key for chat completion RAG synthesis (`mistral-medium-3-5`) |
 | `SARVAM_API_KEY` | (Optional) Sarvam AI key for document OCR/digitization |
+| `UPSTASH_BOX_API_KEY` | (Optional) Upstash Box API key for serverless background OCR & chunking |
+| `UPSTASH_BOX_NAME` | (Optional) Upstash Box name (defaults to `filesense-pipeline`) |
 
 ---
 

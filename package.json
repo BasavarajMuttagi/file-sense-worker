@@ -14,6 +14,7 @@
     "@mistralai/mistralai": "^2.6.4",
     "@opentelemetry/api": "^1.9.1",
     "@tigrisdata/storage": "^3.21.0",
+    "@upstash/box": "^0.7.2",
     "@upstash/vector": "^1.2.3",
     "drizzle-orm": "^1.0.0-rc.4",
     "hono": "^4.12.12",

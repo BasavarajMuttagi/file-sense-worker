@@ -1,4 +1,4 @@
-import { remove } from "@tigrisdata/storage";
+import { getPresignedUrl, remove } from "@tigrisdata/storage";
 
 export interface TigrisEnv {
   TIGRIS_STORAGE_ACCESS_KEY_ID?: string;
@@ -14,6 +14,29 @@ export function getTigrisConfig(env: TigrisEnv) {
     endpoint: env.TIGRIS_STORAGE_ENDPOINT ?? "https://t3.storage.dev",
     bucket: env.TIGRIS_BUCKET_NAME ?? "filesense",
   };
+}
+
+export async function getStoragePresignedDownloadUrl(
+  key: string,
+  env: TigrisEnv,
+  expiresInSeconds = 3600,
+): Promise<string | null> {
+  const config = getTigrisConfig(env);
+  try {
+    const res = await getPresignedUrl(key, {
+      operation: "get",
+      expiresIn: expiresInSeconds,
+      config,
+    });
+    if (res.error) {
+      console.warn("Failed to generate presigned download URL:", res.error);
+      return null;
+    }
+    return res.data?.url ?? null;
+  } catch (err) {
+    console.error("Error generating presigned download URL:", err);
+    return null;
+  }
 }
 
 export async function removeStorageObject(key: string, env: TigrisEnv) {

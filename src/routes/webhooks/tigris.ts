@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 
 import { documents, getDb, projects } from "../../db/index.js";
+import { dispatchDocumentProcessing } from "../../services/box.js";
 import { getVectorIndex } from "../../services/vector.js";
 
 const webhooks = new Hono<{ Bindings: Env }>();
@@ -109,20 +110,33 @@ webhooks.post("/", async (c) => {
 
       const mimeType = getMimeType(cleanFileName);
       const title = cleanFileName.replace(/\.[^.]+$/, "") || cleanFileName;
+      const docId = crypto.randomUUID();
+      const initialStatus = c.env.UPSTASH_BOX_API_KEY ? "processing" : "created";
 
       await db.insert(documents).values({
-        id: crypto.randomUUID(),
+        id: docId,
         projectId,
         title,
         fileName: cleanFileName,
         mimeType,
         fileSize,
         storageUrl: storagePath,
-        status: "created",
+        status: initialStatus,
         chunkCount: 0,
       });
 
-      // Note: Heavy document OCR/digitization and vector chunking is handled externally.
+      if (c.env.UPSTASH_BOX_API_KEY) {
+        c.executionCtx.waitUntil(
+          dispatchDocumentProcessing(c.env, {
+            documentId: docId,
+            storagePath,
+            userId,
+            projectId,
+            fileName: cleanFileName,
+            mimeType,
+          }),
+        );
+      }
     } catch (err: unknown) {
       console.error("Webhook event processing error:", err);
     }

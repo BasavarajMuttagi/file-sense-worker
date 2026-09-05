@@ -46,7 +46,7 @@ export const documents = sqliteTable(
     fileSize: integer("file_size").notNull(),
     storageUrl: text("storage_url"),
     chunkCount: integer("chunk_count").default(0).notNull(),
-    status: text("status", { enum: ["created", "processed", "error"] })
+    status: text("status", { enum: ["created", "processing", "processed", "error"] })
       .default("created")
       .notNull(),
     createdAt: integer("created_at", { mode: "timestamp" })
