@@ -6,7 +6,8 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "start": "wrangler dev",
-    "types": "wrangler types"
+    "types": "wrangler types",
+    "secrets:upload": "node scripts/upload-secrets.mjs"
   },
   "dependencies": {
     "@clerk/hono": "^0.1.76",
