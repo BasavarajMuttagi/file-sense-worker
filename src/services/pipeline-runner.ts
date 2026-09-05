@@ -304,7 +304,7 @@ function chunkPages(pages, targetTokens = 400, overlapTokens = 50) {
 
 async function upsertVectorBatch(batch, vectorRestUrl, vectorRestToken, maxRetries = 3) {
   let attempt = 0;
-  const endpoint = \`\${vectorRestUrl.replace(/\\/$/, "")}/upsert\`;
+  const endpoint = \`\${vectorRestUrl.replace(/\\/$/, "")}/upsert-data\`;
 
   while (attempt < maxRetries) {
     try {
@@ -346,9 +346,9 @@ async function updateTursoStatus(databaseUrl, databaseToken, documentId, status,
           stmt: {
             sql: "UPDATE documents SET status = ?, chunk_count = ?, updated_at = unixepoch() WHERE id = ?",
             args: [
-              { type: "text", value: status },
-              { type: "integer", value: chunkCount },
-              { type: "text", value: documentId },
+              { type: "text", value: String(status) },
+              { type: "integer", value: String(chunkCount) },
+              { type: "text", value: String(documentId) },
             ],
           },
         },
