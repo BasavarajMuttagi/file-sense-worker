@@ -1,0 +1,442 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "id": "cedf7af4-4ffc-48c8-8dd9-917474dfd8bb",
+  "prevIds": [
+    "00000000-0000-0000-0000-000000000000"
+  ],
+  "ddl": [
+    {
+      "name": "documents",
+      "entityType": "tables"
+    },
+    {
+      "name": "projects",
+      "entityType": "tables"
+    },
+    {
+      "name": "queries",
+      "entityType": "tables"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "documents"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "documents"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "documents"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "file_name",
+      "entityType": "columns",
+      "table": "documents"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "mime_type",
+      "entityType": "columns",
+      "table": "documents"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "file_size",
+      "entityType": "columns",
+      "table": "documents"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "storage_url",
+      "entityType": "columns",
+      "table": "documents"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "chunk_count",
+      "entityType": "columns",
+      "table": "documents"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'created'",
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "documents"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(unixepoch())",
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "documents"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(unixepoch())",
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "documents"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "description",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(unixepoch())",
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(unixepoch())",
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "queries"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "queries"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "queries"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "question",
+      "entityType": "columns",
+      "table": "queries"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "answer",
+      "entityType": "columns",
+      "table": "queries"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sources",
+      "entityType": "columns",
+      "table": "queries"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(unixepoch())",
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "queries"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(unixepoch())",
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "queries"
+    },
+    {
+      "columns": [
+        "project_id"
+      ],
+      "tableTo": "projects",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_documents_project_id_projects_id_fk",
+      "entityType": "fks",
+      "table": "documents"
+    },
+    {
+      "columns": [
+        "project_id"
+      ],
+      "tableTo": "projects",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "SET NULL",
+      "nameExplicit": false,
+      "name": "fk_queries_project_id_projects_id_fk",
+      "entityType": "fks",
+      "table": "queries"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "documents_pk",
+      "table": "documents",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "projects_pk",
+      "table": "projects",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "queries_pk",
+      "table": "queries",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "documents_project_id_idx",
+      "entityType": "indexes",
+      "table": "documents"
+    },
+    {
+      "columns": [
+        {
+          "value": "created_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "documents_created_at_idx",
+      "entityType": "indexes",
+      "table": "documents"
+    },
+    {
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "documents_status_idx",
+      "entityType": "indexes",
+      "table": "documents"
+    },
+    {
+      "columns": [
+        {
+          "value": "user_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "projects_user_id_idx",
+      "entityType": "indexes",
+      "table": "projects"
+    },
+    {
+      "columns": [
+        {
+          "value": "created_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "projects_created_at_idx",
+      "entityType": "indexes",
+      "table": "projects"
+    },
+    {
+      "columns": [
+        {
+          "value": "user_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "queries_user_id_idx",
+      "entityType": "indexes",
+      "table": "queries"
+    },
+    {
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "queries_project_id_idx",
+      "entityType": "indexes",
+      "table": "queries"
+    },
+    {
+      "columns": [
+        {
+          "value": "created_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "queries_created_at_idx",
+      "entityType": "indexes",
+      "table": "queries"
+    }
+  ],
+  "renames": []
+}

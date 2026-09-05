@@ -1,13 +1,12 @@
-import { env } from "cloudflare:workers";
-import "dotenv/config";
 import { defineConfig } from "drizzle-kit";
+import "dotenv/config";
 
 export default defineConfig({
   dialect: "turso",
   schema: "./src/db/schema.ts",
   out: "./drizzle",
   dbCredentials: {
-    url: env.DATABASE_URL,
-    authToken: env.TOKEN,
+    url: process.env.DATABASE_URL,
+    authToken: process.env.TOKEN,
   },
 });
