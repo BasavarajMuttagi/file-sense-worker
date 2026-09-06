@@ -22,6 +22,9 @@ export const createQuerySchema = z.object({
 
 export const listQueriesQuerySchema = z.object({
   projectId: z.string().trim().min(1).optional(),
+  limit: z.coerce.number().min(1).max(100).default(20).optional(),
+  before: z.string().optional(),
+  offset: z.coerce.number().min(0).optional(),
 });
 
 export const queryIdParamSchema = z.object({

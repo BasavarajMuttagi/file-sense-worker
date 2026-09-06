@@ -33,37 +33,63 @@ async function main() {
     const buffer = Buffer.from(arrayBuffer);
     console.log(\`[Upstash Box] Download complete (\${buffer.length} bytes)\`);
 
+    // Validation: File size check < 50MB
+    const MAX_FILE_SIZE = 50 * 1024 * 1024;
+    if (buffer.length > MAX_FILE_SIZE) {
+      throw new Error(\`Document exceeds maximum size limit of 50MB (\${(buffer.length / (1024 * 1024)).toFixed(1)}MB)\`);
+    }
+
     // 2. Digitize document (Sarvam AI OCR with local fallback)
     const pages = await digitizeDocument(buffer, job.fileName, job.mimeType, job.sarvamApiKey);
     console.log(\`[Upstash Box] Extracted \${pages.length} page(s)\`);
 
-    // 3. Chunk pages
-    const chunks = chunkPages(pages, 400, 50);
-    console.log(\`[Upstash Box] Generated \${chunks.length} chunk(s)\`);
+    // Validation: Extracted text length & non-printable character ratio
+    const totalExtractedLength = pages.reduce((acc, p) => acc + (p.text?.length || 0), 0);
+    if (totalExtractedLength < 100) {
+      console.warn(\`[Upstash Box] Warning: Extracted text length is very low (\${totalExtractedLength} chars). Document may be image-only, empty, or corrupt.\`);
+    }
+    const combinedText = pages.map((p) => p.text || "").join(" ");
+    if (combinedText.length > 0) {
+      const nonPrintable = (combinedText.match(/[^\x20-\x7E\t\n\r]/g) || []).length;
+      const nonPrintableRatio = nonPrintable / combinedText.length;
+      if (nonPrintableRatio > 0.3) {
+        console.warn(\`[Upstash Box] Warning: High non-printable character ratio (\${(nonPrintableRatio * 100).toFixed(1)}%). Text may be garbled.\`);
+      }
+    }
 
-    // 4. Upsert vectors to Upstash Vector
+    // 3. Chunk pages (Page-bounded semantic chunking with 25% backward overlap)
+    const chunks = chunkPages(pages);
+    console.log(\`[Upstash Box] Generated \${chunks.length} semantic chunk(s) across \${pages.length} page(s)\`);
+
+    // 4. Batch upsert vectors to Upstash Vector with deterministic IDs
     if (chunks.length > 0) {
-      console.log("[Upstash Box] Upserting chunks to Upstash Vector...");
+      console.log("[Upstash Box] Upserting chunks to Upstash Vector in batch...");
+      const uploadedAt = new Date().toISOString();
       const vectorPayloads = chunks.map((chunk) => ({
-        id: \`\${job.documentId}:\${chunk.chunkIndex}\`,
+        id: \`\${job.documentId}#page\${chunk.page}#chunk\${chunk.chunkIndex}\`,
         data: chunk.text,
         metadata: {
           userId: job.userId,
           projectId: job.projectId,
           docId: job.documentId,
           docName: job.fileName,
-          pageStart: chunk.pageStart,
-          pageEnd: chunk.pageEnd,
+          page: chunk.page,
+          pageStart: chunk.page,
+          pageEnd: chunk.page,
           chunkIndex: chunk.chunkIndex,
+          isFirstChunkOfPage: chunk.isFirstChunkOfPage,
+          isLastChunkOfPage: chunk.isLastChunkOfPage,
+          isOverlapped: chunk.isOverlapped,
+          uploadedAt,
         },
       }));
 
       const batchSize = 50;
       for (let i = 0; i < vectorPayloads.length; i += batchSize) {
         const batch = vectorPayloads.slice(i, i + batchSize);
-        await upsertVectorBatch(batch, job.vectorRestUrl, job.vectorRestToken);
+        await upsertVectorBatch(batch, job.vectorRestUrl, job.vectorRestToken, 3, job.documentId, job.userId);
       }
-      console.log(\`[Upstash Box] Indexed \${vectorPayloads.length} vectors successfully\`);
+      console.log(\`[Upstash Box] Indexed \${vectorPayloads.length} vectors successfully with deterministic IDs\`);
     }
 
     // 5. Update Turso document status to "processed"
@@ -258,49 +284,174 @@ function extractPdfTextTokens(content) {
   return tokens;
 }
 
-function chunkPages(pages, maxWordsPerPageChunk = 450, overlapWords = 50) {
-  const chunks = [];
-  if (!pages || pages.length === 0) return chunks;
+function chunkPages(pages) {
+  // Target: 450-500 tokens (TOKEN_RATIO = 0.25 -> 1 token ~ 4 chars -> ~1800-2000 chars)
+  const TARGET_CHARS = 1850;
+  const MIN_CHARS = 200; // 50 tokens
+  const MAX_CHARS = 8000; // 2000 tokens
+  const OVERLAP_RATIO = 0.25; // 25% backward intra-page overlap
 
-  let chunkIndex = 0;
+  const allChunks = [];
+  if (!pages || pages.length === 0) return allChunks;
 
-  // Process strictly page-by-page so chunks never cross page boundaries
   for (const page of pages) {
     const pageNum = page.pageNumber ?? 1;
-    const words = (page.text || "").trim().split(/\\s+/).filter(Boolean);
-    if (words.length === 0) continue;
+    const pageText = (page.text || "").trim();
+    if (!pageText || pageText.length < 10) continue;
 
-    // If page content fits within target limit, keep the entire page intact
-    if (words.length <= maxWordsPerPageChunk) {
-      chunks.push({
-        chunkIndex: chunkIndex++,
-        text: words.join(" "),
-        pageStart: pageNum,
-        pageEnd: pageNum,
+    // Small page (< TARGET_CHARS) kept intact as single chunk
+    if (pageText.length <= TARGET_CHARS) {
+      allChunks.push({
+        page: pageNum,
+        chunkIndex: 0,
+        text: pageText,
+        isFirstChunkOfPage: true,
+        isLastChunkOfPage: true,
+        isOverlapped: false,
       });
-    } else {
-      // For longer pages, sub-chunk strictly within this same page
-      const step = Math.max(1, maxWordsPerPageChunk - overlapWords);
-      for (let i = 0; i < words.length; i += step) {
-        const slice = words.slice(i, i + maxWordsPerPageChunk);
-        if (slice.length === 0) break;
+      continue;
+    }
 
-        chunks.push({
-          chunkIndex: chunkIndex++,
-          text: slice.join(" "),
-          pageStart: pageNum,
-          pageEnd: pageNum,
-        });
+    // Split page text into semantic paragraphs (preserving headers with content)
+    const rawParagraphs = pageText
+      .split(/\\n\\s*\\n+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
 
-        if (i + maxWordsPerPageChunk >= words.length) break;
+    const isHeader = (str) => {
+      const t = str.trim();
+      if (/^#{1,6}\\s+/.test(t)) return true;
+      if (/^[A-Z0-9\\s_\\-]{3,60}:?$/.test(t) && t.length < 60) return true;
+      if (/^(section|chapter|part|module)\\s+\\d+/i.test(t)) return true;
+      return false;
+    };
+
+    const sections = [];
+    let currentHeader = "";
+
+    for (const para of rawParagraphs) {
+      const lines = para.split("\\n").map((l) => l.trim()).filter(Boolean);
+      if (lines.length === 1 && isHeader(lines[0])) {
+        currentHeader = lines[0];
+        continue;
       }
+
+      let content = para;
+      if (currentHeader && !content.startsWith(currentHeader)) {
+        content = currentHeader + "\\n" + content;
+      }
+
+      if (lines.length > 0 && isHeader(lines[0])) {
+        currentHeader = lines[0];
+      }
+
+      sections.push(content);
+    }
+
+    const itemsToChunk = sections.length > 0 ? sections : [pageText];
+
+    // Build base non-overlapping blocks bounded by target size
+    const baseBlocks = [];
+    let currentBlock = "";
+
+    for (const sec of itemsToChunk) {
+      if (sec.length > TARGET_CHARS) {
+        if (currentBlock.length > 0) {
+          baseBlocks.push(currentBlock.trim());
+          currentBlock = "";
+        }
+
+        const sentences = sec.match(/[^.!?]+[.!?]+(\\s+|$)|[^.!?]+$/g) || [sec];
+        let sentenceBlock = "";
+
+        for (const sent of sentences) {
+          if (sent.length > TARGET_CHARS) {
+            if (sentenceBlock.length > 0) {
+              baseBlocks.push(sentenceBlock.trim());
+              sentenceBlock = "";
+            }
+            const words = sent.split(/\\s+/);
+            let wordBlock = "";
+            for (const w of words) {
+              if ((wordBlock + " " + w).length > TARGET_CHARS) {
+                if (wordBlock) baseBlocks.push(wordBlock.trim());
+                wordBlock = w;
+              } else {
+                wordBlock = wordBlock ? wordBlock + " " + w : w;
+              }
+            }
+            if (wordBlock) sentenceBlock = wordBlock;
+          } else if ((sentenceBlock + " " + sent).length > TARGET_CHARS) {
+            if (sentenceBlock) baseBlocks.push(sentenceBlock.trim());
+            sentenceBlock = sent;
+          } else {
+            sentenceBlock = sentenceBlock ? sentenceBlock + " " + sent : sent;
+          }
+        }
+        if (sentenceBlock.length > 0) {
+          currentBlock = sentenceBlock;
+        }
+      } else if ((currentBlock + "\\n\\n" + sec).length > TARGET_CHARS) {
+        if (currentBlock.length > 0) {
+          baseBlocks.push(currentBlock.trim());
+        }
+        currentBlock = sec;
+      } else {
+        currentBlock = currentBlock ? currentBlock + "\\n\\n" + sec : sec;
+      }
+    }
+
+    if (currentBlock.trim().length > 0) {
+      baseBlocks.push(currentBlock.trim());
+    }
+
+    // Merge tiny trailing block if < MIN_CHARS (50 tokens)
+    if (baseBlocks.length > 1) {
+      const lastIdx = baseBlocks.length - 1;
+      if (baseBlocks[lastIdx].length < MIN_CHARS) {
+        baseBlocks[lastIdx - 1] += "\\n\\n" + baseBlocks[lastIdx];
+        baseBlocks.pop();
+      }
+    }
+
+    // Apply 25% backward intra-page overlap
+    for (let i = 0; i < baseBlocks.length; i++) {
+      let chunkText = baseBlocks[i];
+      let isOverlapped = false;
+
+      if (i > 0) {
+        const prevBlock = baseBlocks[i - 1];
+        const overlapTargetChars = Math.floor(baseBlocks[i].length * OVERLAP_RATIO);
+        if (prevBlock.length > 100 && overlapTargetChars > 50) {
+          const tail = prevBlock.slice(-Math.min(prevBlock.length, overlapTargetChars + 150));
+          const boundaryMatch = tail.search(/(?<=[.!?\\n])\\s+/);
+          const overlapSnippet = boundaryMatch !== -1 ? tail.slice(boundaryMatch).trim() : tail.slice(-overlapTargetChars).trim();
+          if (overlapSnippet && !chunkText.includes(overlapSnippet)) {
+            chunkText = overlapSnippet + "\\n...\\n" + chunkText;
+            isOverlapped = true;
+          }
+        }
+      }
+
+      if (chunkText.length > MAX_CHARS) {
+        chunkText = chunkText.slice(0, MAX_CHARS);
+      }
+
+      allChunks.push({
+        page: pageNum,
+        chunkIndex: i,
+        text: chunkText,
+        isFirstChunkOfPage: i === 0,
+        isLastChunkOfPage: i === baseBlocks.length - 1,
+        isOverlapped,
+      });
     }
   }
 
-  return chunks;
+  return allChunks;
 }
 
-async function upsertVectorBatch(batch, vectorRestUrl, vectorRestToken, maxRetries = 3) {
+async function upsertVectorBatch(batch, vectorRestUrl, vectorRestToken, maxRetries = 3, docId = "", userId = "") {
   let attempt = 0;
   const endpoint = \`\${vectorRestUrl.replace(/\\/$/, "")}/upsert-data\`;
 
@@ -321,8 +472,10 @@ async function upsertVectorBatch(batch, vectorRestUrl, vectorRestToken, maxRetri
       return;
     } catch (err) {
       attempt++;
+      console.error(\`[Upstash Vector] Upsert attempt \${attempt} failed for docId: \${docId}, userId: \${userId}:\`, err.message);
       if (attempt >= maxRetries) throw err;
-      await new Promise((r) => setTimeout(r, 1000 * attempt));
+      const backoffMs = Math.pow(2, attempt) * 1000;
+      await new Promise((r) => setTimeout(r, backoffMs));
     }
   }
 }
