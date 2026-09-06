@@ -86,6 +86,8 @@ export const queries = sqliteTable(
         chunkIndex: number;
         text: string;
         score: number;
+        pageStart?: number | null;
+        pageEnd?: number | null;
       }>
     >(),
     createdAt: integer("created_at", { mode: "timestamp" })

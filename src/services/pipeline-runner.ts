@@ -194,8 +194,7 @@ function extractTextLocally(buffer, mimeType) {
 
   const streamRegex = /stream[\\r\\n]+([\\s\\S]*?)[\\r\\n]+endstream/g;
   let match = null;
-  const pageIndex = 1;
-  const extractedPieces = [];
+  let streamCount = 0;
 
   while ((match = streamRegex.exec(content)) !== null) {
     const rawStream = match[1];
@@ -217,14 +216,12 @@ function extractTextLocally(buffer, mimeType) {
     const textToScan = decompressed ?? rawStream;
     const textPieces = extractPdfTextTokens(textToScan);
     if (textPieces.length > 0) {
-      extractedPieces.push(textPieces.join(" "));
+      streamCount++;
+      pages.push({ pageNumber: streamCount, text: textPieces.join(" ") });
     }
   }
 
-  if (extractedPieces.length > 0) {
-    const fullText = extractedPieces.join("\\n\\n");
-    pages.push({ pageNumber: pageIndex, text: fullText });
-  } else {
+  if (pages.length === 0) {
     const cleaned = buffer
       .toString("utf-8")
       .replace(/[^\\x20-\\x7E\\n\\r\\t]/g, " ")
@@ -261,42 +258,43 @@ function extractPdfTextTokens(content) {
   return tokens;
 }
 
-function chunkPages(pages, targetTokens = 400, overlapTokens = 50) {
+function chunkPages(pages, maxWordsPerPageChunk = 450, overlapWords = 50) {
   const chunks = [];
-  if (pages.length === 0) return chunks;
-
-  const wordsWithPage = [];
-  for (const page of pages) {
-    const words = page.text.trim().split(/\\s+/).filter(Boolean);
-    for (const word of words) {
-      wordsWithPage.push({ word, page: page.pageNumber });
-    }
-  }
-
-  if (wordsWithPage.length === 0) return chunks;
-
-  const targetWords = Math.max(50, Math.floor(targetTokens * 0.75));
-  const overlapWords = Math.max(0, Math.floor(overlapTokens * 0.75));
-  const step = Math.max(1, targetWords - overlapWords);
+  if (!pages || pages.length === 0) return chunks;
 
   let chunkIndex = 0;
-  for (let i = 0; i < wordsWithPage.length; i += step) {
-    const slice = wordsWithPage.slice(i, i + targetWords);
-    if (slice.length === 0) break;
 
-    const chunkText = slice.map((item) => item.word).join(" ");
-    const pageStart = slice[0]?.page ?? 1;
-    const pageEnd = slice[slice.length - 1]?.page ?? pageStart;
+  // Process strictly page-by-page so chunks never cross page boundaries
+  for (const page of pages) {
+    const pageNum = page.pageNumber ?? 1;
+    const words = (page.text || "").trim().split(/\\s+/).filter(Boolean);
+    if (words.length === 0) continue;
 
-    chunks.push({
-      chunkIndex,
-      text: chunkText,
-      pageStart,
-      pageEnd,
-    });
-    chunkIndex++;
+    // If page content fits within target limit, keep the entire page intact
+    if (words.length <= maxWordsPerPageChunk) {
+      chunks.push({
+        chunkIndex: chunkIndex++,
+        text: words.join(" "),
+        pageStart: pageNum,
+        pageEnd: pageNum,
+      });
+    } else {
+      // For longer pages, sub-chunk strictly within this same page
+      const step = Math.max(1, maxWordsPerPageChunk - overlapWords);
+      for (let i = 0; i < words.length; i += step) {
+        const slice = words.slice(i, i + maxWordsPerPageChunk);
+        if (slice.length === 0) break;
 
-    if (i + targetWords >= wordsWithPage.length) break;
+        chunks.push({
+          chunkIndex: chunkIndex++,
+          text: slice.join(" "),
+          pageStart: pageNum,
+          pageEnd: pageNum,
+        });
+
+        if (i + maxWordsPerPageChunk >= words.length) break;
+      }
+    }
   }
 
   return chunks;
