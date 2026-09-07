@@ -174,6 +174,22 @@ async function callMistralChatCompletion(
   return "";
 }
 
+async function generateQueryEmbedding(queryText: string, apiKey: string): Promise<number[]> {
+  const client = new Mistral({ apiKey });
+  const prefixedQuery = `search_query: ${queryText}`;
+  const response = await client.embeddings.create({
+    model: "mistral-embed",
+    inputs: [prefixedQuery],
+  });
+
+  const embedding = response.data?.[0]?.embedding;
+  if (!embedding || !Array.isArray(embedding)) {
+    throw new Error("Mistral Embedding SDK did not return a valid embedding vector");
+  }
+
+  return embedding;
+}
+
 queriesRoute.post("/", async (c) => {
   const { userId } = getAuth(c);
   if (!userId) {
@@ -232,30 +248,73 @@ queriesRoute.post("/", async (c) => {
     }
   }
 
+  const mistralApiKey = (c.env as unknown as Record<string, unknown>).MISTRAL_API_KEY as string | undefined;
+
   let retrievedChunks: SourceItem[] = [];
 
   try {
+    let queryVector: number[] = [];
+    if (mistralApiKey) {
+      queryVector = await generateQueryEmbedding(vectorQueryText, mistralApiKey);
+    }
+
     const vectorIndex = getVectorIndex(c.env);
-    const vectorResults = await vectorIndex.query<{
-      userId?: string;
-      projectId?: string;
-      docId?: string;
-      docName?: string;
-      page?: number;
-      pageStart?: number;
-      pageEnd?: number;
-      chunkIndex?: number;
-      isFirstChunkOfPage?: boolean;
-      isLastChunkOfPage?: boolean;
-      isOverlapped?: boolean;
-      uploadedAt?: string;
-    }>({
-      data: vectorQueryText,
-      topK: 10,
-      includeMetadata: true,
-      includeData: true,
-      filter,
-    });
+    let vectorResults: Array<{
+      id: string | number;
+      score?: number;
+      data?: string;
+      metadata?: Record<string, unknown>;
+    }> = [];
+
+    if (queryVector.length > 0) {
+      try {
+        vectorResults = await vectorIndex.query<{
+          userId?: string;
+          projectId?: string;
+          docId?: string;
+          docName?: string;
+          page?: number;
+          pageStart?: number;
+          pageEnd?: number;
+          chunkIndex?: number;
+          text?: string;
+          type?: string;
+          parentId?: string;
+          isFirstChunkOfPage?: boolean;
+          isLastChunkOfPage?: boolean;
+          isOverlapped?: boolean;
+          uploadedAt?: string;
+        }>({
+          vector: queryVector,
+          topK: 10,
+          includeMetadata: true,
+          includeData: true,
+          filter,
+        });
+      } catch (vecErr: unknown) {
+        const msg = vecErr instanceof Error ? vecErr.message : String(vecErr);
+        if (msg.toLowerCase().includes("dimension")) {
+          console.warn("[Upstash Vector] Dimension mismatch with Mistral 1024d vector, falling back to Upstash built-in embedding:", msg);
+          vectorResults = await vectorIndex.query({
+            data: vectorQueryText,
+            topK: 10,
+            includeMetadata: true,
+            includeData: true,
+            filter,
+          });
+        } else {
+          throw vecErr;
+        }
+      }
+    } else {
+      vectorResults = await vectorIndex.query({
+        data: vectorQueryText,
+        topK: 10,
+        includeMetadata: true,
+        includeData: true,
+        filter,
+      });
+    }
 
     retrievedChunks = (vectorResults || []).map((match) => {
       const pageNum =
@@ -267,32 +326,37 @@ queriesRoute.post("/", async (c) => {
 
       return {
         id: String(match.id ?? ""),
-        docId: match.metadata?.docId ?? "",
-        docName: match.metadata?.docName || "Document",
+        docId: (match.metadata?.docId as string) ?? "",
+        docName: (match.metadata?.docName as string) || "Document",
         page: pageNum,
         pageStart: pageNum,
         pageEnd: typeof match.metadata?.pageEnd === "number" ? match.metadata.pageEnd : pageNum,
-        chunkIndex: match.metadata?.chunkIndex ?? 0,
-        snippet: typeof match.data === "string" ? match.data : "",
+        chunkIndex: (match.metadata?.chunkIndex as number) ?? 0,
+        snippet: (typeof match.data === "string" && match.data) ? match.data : ((match.metadata?.text as string) ?? ""),
         score: typeof match.score === "number" ? match.score : 0,
-        isFirstChunkOfPage: match.metadata?.isFirstChunkOfPage ?? (match.metadata?.chunkIndex === 0),
-        isLastChunkOfPage: match.metadata?.isLastChunkOfPage ?? false,
+        isFirstChunkOfPage: (match.metadata?.isFirstChunkOfPage as boolean) ?? (match.metadata?.chunkIndex === 0),
+        isLastChunkOfPage: (match.metadata?.isLastChunkOfPage as boolean) ?? false,
       };
     });
   } catch (err: unknown) {
     console.error("Upstash vector search failed:", err);
   }
 
-  // 1. Two-Tier Confidence Filtering:
-  // High confidence threshold (>= 0.75)
-  const highConfidenceChunks = retrievedChunks.filter((c) => (c.score ?? 0) >= 0.75);
+  // 1. Adaptive Confidence Filtering:
+  // Try high confidence threshold (>= 0.70)
+  const highConfidenceChunks = retrievedChunks.filter((c) => (c.score ?? 0) >= 0.70);
 
   let candidateChunks: SourceItem[] = [];
-  if (highConfidenceChunks.length >= 3) {
+  if (highConfidenceChunks.length >= 2) {
     candidateChunks = highConfidenceChunks;
   } else {
-    // Relax threshold to >= 0.65 if fewer than 3 high-confidence chunks
-    candidateChunks = retrievedChunks.filter((c) => (c.score ?? 0) >= 0.65);
+    // Relax threshold to >= 0.55 if fewer than 2 high-confidence chunks
+    candidateChunks = retrievedChunks.filter((c) => (c.score ?? 0) >= 0.55);
+  }
+
+  // If still empty but matches exist, include the top matching chunks
+  if (candidateChunks.length === 0 && retrievedChunks.length > 0) {
+    candidateChunks = retrievedChunks.slice(0, 3);
   }
 
   // 2. Context Continuity at Page Boundaries:
@@ -432,9 +496,6 @@ queriesRoute.post("/", async (c) => {
     systemPrompt ||
     projectDescription ||
     undefined;
-
-  const mistralApiKey = (c.env as unknown as Record<string, unknown>)
-    .MISTRAL_API_KEY as string | undefined;
 
   // Real-time SSE Streaming Mode
   if (shouldStream) {

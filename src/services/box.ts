@@ -27,27 +27,58 @@ export async function getOrCreateProcessingBox(env: Env): Promise<Box | null> {
 
   const boxName = DEFAULT_BOX_NAME;
 
+  let box: Box | null = null;
   try {
-    const existingBox = await Box.getByName(boxName, { apiKey });
-    if (existingBox) {
-      return existingBox;
-    }
+    box = await Box.getByName(boxName, { apiKey });
   } catch {
-    // Box doesn't exist yet, proceed to create
+    // Box doesn't exist yet
   }
 
-  try {
-    const newBox = await Box.create({
-      name: boxName,
-      runtime: "node",
-      size: "small",
-      apiKey,
-    });
-    return newBox;
-  } catch (createErr) {
-    console.error("[Upstash Box] Failed to create or connect to box:", createErr);
-    return null;
+  if (!box) {
+    try {
+      box = await Box.create({
+        name: boxName,
+        runtime: "node",
+        size: "small",
+        apiKey,
+      });
+    } catch (createErr) {
+      console.error("[Upstash Box] Failed to create box:", createErr);
+      return null;
+    }
   }
+
+  // Ensure SDK dependencies are installed in this box
+  try {
+    const check = await box.exec.command("node -e 'import(\"sarvamai\")'");
+    if (check.exitCode !== 0) {
+      console.log("[Upstash Box] Dependencies not found in box. Writing package.json and running npm install...");
+      await box.files.write({
+        path: "package.json",
+        content: JSON.stringify(
+          {
+            name: "filesense-box-runner",
+            type: "module",
+            dependencies: {
+              sarvamai: "^1.1.9",
+              "@mistralai/mistralai": "^2.6.4",
+              "@upstash/vector": "^1.2.3",
+              "@libsql/client": "^0.18.0",
+              "pdf-parse": "^1.1.4",
+            },
+          },
+          null,
+          2,
+        ),
+      });
+      const installRes = await box.exec.command("npm install");
+      console.log(`[Upstash Box] npm install finished with code ${installRes.exitCode}`);
+    }
+  } catch (checkErr) {
+    console.warn("[Upstash Box] Dependency check warning:", checkErr);
+  }
+
+  return box;
 }
 
 /**
@@ -102,6 +133,7 @@ export async function dispatchDocumentProcessing(
       fileName: job.fileName,
       mimeType: job.mimeType,
       sarvamApiKey: env.SARVAM_API_KEY,
+      mistralApiKey: env.MISTRAL_API_KEY,
       vectorRestUrl: env.UPSTASH_VECTOR_REST_URL,
       vectorRestToken: env.UPSTASH_VECTOR_REST_TOKEN,
       databaseUrl: env.DATABASE_URL,
