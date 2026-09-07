@@ -1,5 +1,5 @@
 import { getAuth } from "@clerk/hono";
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, lt, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { streamSSE } from "hono/streaming";
@@ -207,11 +207,14 @@ queriesRoute.post("/", async (c) => {
   const {
     question,
     projectId,
+    sessionId,
     systemInstruction,
     systemPrompt,
     stream: requestStream,
     history,
   } = parsed.data;
+
+  const finalSessionId = sessionId || crypto.randomUUID();
 
   const shouldStream =
     requestStream === true ||
@@ -560,6 +563,7 @@ queriesRoute.post("/", async (c) => {
           .values({
             userId,
             projectId: projectId ?? null,
+            sessionId: finalSessionId,
             question: question.trim(),
             answer: fullAnswer,
             sources: mappedSources,
@@ -570,6 +574,7 @@ queriesRoute.post("/", async (c) => {
           event: "done",
           data: JSON.stringify({
             id: queryRecord?.id ?? null,
+            sessionId: finalSessionId,
             answer: fullAnswer,
           }),
         });
@@ -579,6 +584,7 @@ queriesRoute.post("/", async (c) => {
           event: "done",
           data: JSON.stringify({
             id: null,
+            sessionId: finalSessionId,
             answer: fullAnswer,
           }),
         });
@@ -617,6 +623,7 @@ queriesRoute.post("/", async (c) => {
     .values({
       userId,
       projectId: projectId ?? null,
+      sessionId: finalSessionId,
       question: question.trim(),
       answer,
       sources: mappedSources,
@@ -630,6 +637,7 @@ queriesRoute.post("/", async (c) => {
   return c.json(
     {
       id: queryRecord.id,
+      sessionId: finalSessionId,
       question: queryRecord.question,
       answer: queryRecord.answer,
       sources: queryRecord.sources,
@@ -653,7 +661,7 @@ queriesRoute.get("/", async (c) => {
     });
   }
 
-  const { projectId, limit = 20, before } = parsed.data;
+  const { projectId, sessionId, limit = 20, before } = parsed.data;
   const db = getDb(c.env);
 
   if (projectId) {
@@ -672,6 +680,12 @@ queriesRoute.get("/", async (c) => {
   if (projectId) {
     conditions.push(eq(queries.projectId, projectId));
   }
+  if (sessionId) {
+    const sessionCond = or(eq(queries.sessionId, sessionId), eq(queries.id, sessionId));
+    if (sessionCond) {
+      conditions.push(sessionCond);
+    }
+  }
 
   if (before) {
     const beforeDate = new Date(isNaN(Number(before)) ? before : Number(before));
@@ -684,6 +698,7 @@ queriesRoute.get("/", async (c) => {
   const qs = await db
     .select({
       id: queries.id,
+      sessionId: queries.sessionId,
       question: queries.question,
       answer: queries.answer,
       sources: queries.sources,
@@ -709,6 +724,72 @@ queriesRoute.get("/", async (c) => {
     hasMore,
     nextCursor: qs.length > 0 ? (qs[qs.length - 1]?.createdAt ?? null) : null,
   });
+});
+
+queriesRoute.get("/sessions", async (c) => {
+  const { userId } = getAuth(c);
+  if (!userId) {
+    throw new HTTPException(401, { message: "Unauthorized" });
+  }
+
+  const projectId = c.req.query("projectId");
+  if (!projectId) {
+    throw new HTTPException(400, { message: "projectId is required" });
+  }
+
+  const db = getDb(c.env);
+
+  const rawQueries = await db
+    .select({
+      id: queries.id,
+      sessionId: queries.sessionId,
+      question: queries.question,
+      createdAt: queries.createdAt,
+      updatedAt: queries.updatedAt,
+    })
+    .from(queries)
+    .where(and(eq(queries.userId, userId), eq(queries.projectId, projectId)))
+    .orderBy(desc(queries.createdAt));
+
+  const sessionMap = new Map<
+    string,
+    {
+      sessionId: string;
+      title: string;
+      createdAt: string;
+      updatedAt: string;
+      messageCount: number;
+    }
+  >();
+
+  for (const q of rawQueries) {
+    const sId = q.sessionId || q.id;
+    const existing = sessionMap.get(sId);
+    const qCreatedAtStr = q.createdAt instanceof Date ? q.createdAt.toISOString() : String(q.createdAt);
+    const qUpdatedAtStr = q.updatedAt instanceof Date ? q.updatedAt.toISOString() : qCreatedAtStr;
+
+    if (!existing) {
+      sessionMap.set(sId, {
+        sessionId: sId,
+        title: q.question,
+        createdAt: qCreatedAtStr,
+        updatedAt: qUpdatedAtStr,
+        messageCount: 1,
+      });
+    } else {
+      existing.messageCount += 1;
+      existing.title = q.question; // earliest question because rawQueries is desc
+      if (new Date(qCreatedAtStr).getTime() < new Date(existing.createdAt).getTime()) {
+        existing.createdAt = qCreatedAtStr;
+      }
+    }
+  }
+
+  const sessions = Array.from(sessionMap.values()).sort(
+    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+  );
+
+  return c.json({ sessions });
 });
 
 queriesRoute.get("/:id", async (c) => {

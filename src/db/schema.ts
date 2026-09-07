@@ -77,6 +77,7 @@ export const queries = sqliteTable(
     projectId: text("project_id").references(() => projects.id, {
       onDelete: "set null",
     }),
+    sessionId: text("session_id"),
     question: text("question").notNull(),
     answer: text("answer"),
     sources: text("sources", { mode: "json" }).$type<
@@ -101,6 +102,7 @@ export const queries = sqliteTable(
   (table) => [
     index("queries_user_id_idx").on(table.userId),
     index("queries_project_id_idx").on(table.projectId),
+    index("queries_session_id_idx").on(table.sessionId),
     index("queries_created_at_idx").on(table.createdAt),
   ],
 );
