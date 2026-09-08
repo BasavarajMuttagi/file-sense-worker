@@ -11,7 +11,6 @@ import nodeFs from "node:fs";
 import zlib from "node:zlib";
 import pdfParse from "pdf-parse";
 import { SarvamAIClient } from "sarvamai";
-import { Mistral } from "@mistralai/mistralai";
 import { Index } from "@upstash/vector";
 import { createClient } from "@libsql/client/web";
 
@@ -73,22 +72,17 @@ async function main() {
       }
     }
 
-    // 3. Chunk pages (Parent-Child Multi-Vector Chunking with docId scoping)
+    // 3. Chunk pages (Semantic document chunking with docId scoping)
     const chunks = chunkPages(pages, job.documentId);
-    console.log(\`[Upstash Box] Generated \${chunks.length} multi-vector chunk(s) across \${pages.length} page(s)\`);
+    console.log(\`[Upstash Box] Generated \${chunks.length} chunk(s) across \${pages.length} page(s)\`);
 
-    // 4. Generate Embeddings using official Mistral SDK with retrieval prefixes
-    console.log("[Upstash Box] Generating embeddings via Mistral SDK...");
-    const embeddedChunks = await generateMistralEmbeddings(chunks, mistralApiKey);
-    console.log(\`[Upstash Box] Generated embeddings for \${embeddedChunks.length} chunks\`);
-
-    // 5. Batch upsert vectors using official @upstash/vector SDK
+    // 4. Batch upsert vectors using official @upstash/vector SDK with automatic Hybrid (Dense + BM25) embedding
     if (chunks.length > 0) {
-      console.log("[Upstash Box] Upserting chunks to Upstash Vector in batch...");
+      console.log("[Upstash Box] Upserting chunks to Upstash Vector in batch (Hybrid Dense + BM25)...");
       const uploadedAt = new Date().toISOString();
       const vectorPayloads = chunks.map((chunk) => ({
         id: chunk.id || \`\${job.documentId}#page\${chunk.page}#chunk\${chunk.chunkIndex}\`,
-        vector: chunk.vector,
+        data: chunk.text,
         metadata: {
           userId: job.userId,
           projectId: job.projectId,
@@ -98,8 +92,7 @@ async function main() {
           pageStart: chunk.page,
           pageEnd: chunk.page,
           chunkIndex: chunk.chunkIndex,
-          type: chunk.type,
-          parentId: chunk.parentId,
+          type: chunk.type || "content",
           text: chunk.text,
           isFirstChunkOfPage: chunk.isFirstChunkOfPage,
           isLastChunkOfPage: chunk.isLastChunkOfPage,
@@ -405,12 +398,11 @@ function chunkPages(rawPages, docId = "") {
     const pageText = (page.text || "").trim();
     if (!pageText || pageText.length < 10) continue;
 
-    // Small page (< TARGET_CHARS) kept intact as single parent chunk
+    // Small page (< TARGET_CHARS) kept intact as single chunk
     if (pageText.length <= TARGET_CHARS) {
       allChunks.push({
         id: (docId ? docId + "#" : "") + "page" + pageNum + "#chunk0",
-        type: "parent",
-        parentId: null,
+        type: "content",
         page: pageNum,
         chunkIndex: 0,
         text: pageText,
@@ -420,20 +412,6 @@ function chunkPages(rawPages, docId = "") {
       });
       continue;
     }
-
-    // Embed the full page (capped to safe limit) as a Parent chunk
-    const parentId = (docId ? docId + "#" : "") + "parent-page-" + pageNum;
-    allChunks.push({
-      id: parentId,
-      type: "parent",
-      parentId: null,
-      page: pageNum,
-      chunkIndex: -1,
-      text: pageText.slice(0, 4000),
-      isFirstChunkOfPage: true,
-      isLastChunkOfPage: true,
-      isOverlapped: false,
-    });
 
     // Split page text into semantic paragraphs
     const rawParagraphs = pageText
@@ -566,8 +544,8 @@ function chunkPages(rawPages, docId = "") {
       }
 
       allChunks.push({
-        type: "child",
-        parentId,
+        id: (docId ? docId + "#" : "") + "page" + pageNum + "#chunk" + i,
+        type: "content",
         page: pageNum,
         chunkIndex: i,
         text: chunkText,
@@ -579,37 +557,6 @@ function chunkPages(rawPages, docId = "") {
   }
 
   return allChunks;
-}
-
-async function generateMistralEmbeddings(chunks, apiKey) {
-  if (!apiKey) throw new Error("Missing MISTRAL_API_KEY for embedding generation");
-
-  const mistral = new Mistral({ apiKey });
-  const BATCH_SIZE = 50;
-  const embeddedChunks = [];
-
-  for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-    const batch = chunks.slice(i, i + BATCH_SIZE);
-    const inputs = batch.map((c) => \`search_document: \${c.text.slice(0, 6000)}\`);
-
-    const res = await mistral.embeddings.create({
-      model: "mistral-embed",
-      inputs,
-    });
-
-    for (let j = 0; j < batch.length; j++) {
-      const chunk = batch[j];
-      if (!chunk) continue;
-      const vec = res.data?.[j]?.embedding;
-      if (!vec || !Array.isArray(vec)) {
-        throw new Error(\`Mistral SDK did not return valid embedding for chunk \${j}\`);
-      }
-      chunk.vector = vec;
-      embeddedChunks.push(chunk);
-    }
-  }
-
-  return embeddedChunks;
 }
 
 async function upsertVectorBatch(batch, vectorRestUrl, vectorRestToken, maxRetries = 3, docId = "", userId = "") {
@@ -625,16 +572,6 @@ async function upsertVectorBatch(batch, vectorRestUrl, vectorRestToken, maxRetri
       return;
     } catch (err) {
       const msg = err?.message || String(err);
-      if (msg.toLowerCase().includes("dimension")) {
-        console.warn("[Upstash Vector] Dimension mismatch during upsert, falling back to built-in data upsert:", msg);
-        const dataBatch = batch.map((item) => ({
-          id: item.id,
-          data: item.metadata?.text || "",
-          metadata: item.metadata,
-        }));
-        await index.upsert(dataBatch);
-        return;
-      }
       attempt++;
       console.error(\`[Upstash Vector] Upsert attempt \${attempt} failed for docId: \${docId}, userId: \${userId}:\`, msg);
       if (attempt >= maxRetries) throw err;

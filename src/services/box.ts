@@ -74,7 +74,6 @@ export async function dispatchDocumentProcessing(
           type: "module",
           dependencies: {
             sarvamai: "^1.1.9",
-            "@mistralai/mistralai": "^2.6.4",
             "@upstash/vector": "^1.2.3",
             "@libsql/client": "^0.18.0",
             "pdf-parse": "^1.1.4",

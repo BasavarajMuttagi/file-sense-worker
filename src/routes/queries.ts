@@ -4,8 +4,9 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { streamSSE } from "hono/streaming";
 
-import { getDb, projects, queries } from "../db/index.js";
+import { getDb, projects, queries, documents } from "../db/index.js";
 import { getVectorIndex } from "../services/vector.js";
+import { FusionAlgorithm } from "@upstash/vector";
 import {
   createQuerySchema,
   listQueriesQuerySchema,
@@ -174,21 +175,6 @@ async function callMistralChatCompletion(
   return "";
 }
 
-async function generateQueryEmbedding(queryText: string, apiKey: string): Promise<number[]> {
-  const client = new Mistral({ apiKey });
-  const prefixedQuery = `search_query: ${queryText}`;
-  const response = await client.embeddings.create({
-    model: "mistral-embed",
-    inputs: [prefixedQuery],
-  });
-
-  const embedding = response.data?.[0]?.embedding;
-  if (!embedding || !Array.isArray(embedding)) {
-    throw new Error("Mistral Embedding SDK did not return a valid embedding vector");
-  }
-
-  return embedding;
-}
 
 queriesRoute.post("/", async (c) => {
   const { userId } = getAuth(c);
@@ -238,6 +224,96 @@ queriesRoute.post("/", async (c) => {
     projectDescription = project.description;
   }
 
+  // Check if project has any uploaded documents
+  let hasDocuments = true;
+  if (projectId) {
+    const existingDocs = await db
+      .select({ id: documents.id })
+      .from(documents)
+      .where(eq(documents.projectId, projectId))
+      .limit(1);
+    hasDocuments = existingDocs.length > 0;
+  }
+
+  // Conversational Greeting Check: natural courteous response without empty document error
+  const pureGreetingRegex =
+    /^(hello|hi|hey|hiya|greetings|good morning|good afternoon|good evening|howdy|hola|yo|sup|what's up|whats up|who are you|what are you|what can you do)[\s!.,?]*$/i;
+
+  const isGreeting = pureGreetingRegex.test(question.trim());
+
+  if (isGreeting) {
+    const greetingAnswer = hasDocuments
+      ? "Hello! How can I help you explore the documents in this project today? Feel free to ask about any specific topics, summarize sections, or extract technical details with verified page citations."
+      : "Hello! Welcome to FileSense. No documents have been uploaded to this project yet. Please upload or attach documents (such as PDF, DOCX, or text files) to get started, and I'll be happy to help answer your questions with verified citations.";
+
+    if (shouldStream) {
+      return streamSSE(c, async (stream) => {
+        await stream.writeSSE({
+          event: "sources",
+          data: JSON.stringify([]),
+        });
+        await stream.writeSSE({
+          event: "token",
+          data: JSON.stringify({ text: greetingAnswer }),
+        });
+
+        try {
+          const [queryRecord] = await db
+            .insert(queries)
+            .values({
+              userId,
+              projectId: projectId ?? null,
+              sessionId: finalSessionId,
+              question: question.trim(),
+              answer: greetingAnswer,
+              sources: [],
+            })
+            .returning();
+
+          await stream.writeSSE({
+            event: "done",
+            data: JSON.stringify({
+              id: queryRecord?.id ?? null,
+              answer: greetingAnswer,
+            }),
+          });
+        } catch (dbErr) {
+          console.error("Failed to save greeting query to DB:", dbErr);
+          await stream.writeSSE({
+            event: "done",
+            data: JSON.stringify({
+              id: null,
+              answer: greetingAnswer,
+            }),
+          });
+        }
+      });
+    }
+
+    const [queryRecord] = await db
+      .insert(queries)
+      .values({
+        userId,
+        projectId: projectId ?? null,
+        sessionId: finalSessionId,
+        question: question.trim(),
+        answer: greetingAnswer,
+        sources: [],
+      })
+      .returning();
+
+    return c.json(
+      {
+        id: queryRecord?.id ?? crypto.randomUUID(),
+        question: question.trim(),
+        answer: greetingAnswer,
+        sources: [],
+        createdAt: queryRecord?.createdAt ?? new Date(),
+      },
+      201,
+    );
+  }
+
   const filter = projectId
     ? `userId = '${userId}' AND projectId = '${projectId}'`
     : `userId = '${userId}'`;
@@ -256,68 +332,30 @@ queriesRoute.post("/", async (c) => {
   let retrievedChunks: SourceItem[] = [];
 
   try {
-    let queryVector: number[] = [];
-    if (mistralApiKey) {
-      queryVector = await generateQueryEmbedding(vectorQueryText, mistralApiKey);
-    }
-
     const vectorIndex = getVectorIndex(c.env);
-    let vectorResults: Array<{
-      id: string | number;
-      score?: number;
-      data?: string;
-      metadata?: Record<string, unknown>;
-    }> = [];
-
-    if (queryVector.length > 0) {
-      try {
-        vectorResults = await vectorIndex.query<{
-          userId?: string;
-          projectId?: string;
-          docId?: string;
-          docName?: string;
-          page?: number;
-          pageStart?: number;
-          pageEnd?: number;
-          chunkIndex?: number;
-          text?: string;
-          type?: string;
-          parentId?: string;
-          isFirstChunkOfPage?: boolean;
-          isLastChunkOfPage?: boolean;
-          isOverlapped?: boolean;
-          uploadedAt?: string;
-        }>({
-          vector: queryVector,
-          topK: 10,
-          includeMetadata: true,
-          includeData: true,
-          filter,
-        });
-      } catch (vecErr: unknown) {
-        const msg = vecErr instanceof Error ? vecErr.message : String(vecErr);
-        if (msg.toLowerCase().includes("dimension")) {
-          console.warn("[Upstash Vector] Dimension mismatch with Mistral 1024d vector, falling back to Upstash built-in embedding:", msg);
-          vectorResults = await vectorIndex.query({
-            data: vectorQueryText,
-            topK: 10,
-            includeMetadata: true,
-            includeData: true,
-            filter,
-          });
-        } else {
-          throw vecErr;
-        }
-      }
-    } else {
-      vectorResults = await vectorIndex.query({
-        data: vectorQueryText,
-        topK: 10,
-        includeMetadata: true,
-        includeData: true,
-        filter,
-      });
-    }
+    const vectorResults = await vectorIndex.query<{
+      userId?: string;
+      projectId?: string;
+      docId?: string;
+      docName?: string;
+      page?: number;
+      pageStart?: number;
+      pageEnd?: number;
+      chunkIndex?: number;
+      text?: string;
+      type?: string;
+      isFirstChunkOfPage?: boolean;
+      isLastChunkOfPage?: boolean;
+      isOverlapped?: boolean;
+      uploadedAt?: string;
+    }>({
+      data: vectorQueryText,
+      topK: 15,
+      includeMetadata: true,
+      includeData: true,
+      filter,
+      fusionAlgorithm: FusionAlgorithm.DBSF,
+    });
 
     retrievedChunks = (vectorResults || []).map((match) => {
       const pageNum =
@@ -342,28 +380,31 @@ queriesRoute.post("/", async (c) => {
       };
     });
   } catch (err: unknown) {
-    console.error("Upstash vector search failed:", err);
+    console.error("Upstash hybrid vector search failed:", err);
   }
 
   // 1. Adaptive Confidence Filtering:
-  // Try high confidence threshold (>= 0.70)
-  const highConfidenceChunks = retrievedChunks.filter((c) => (c.score ?? 0) >= 0.70);
-
+  // Detect if scores are RRF scores (Upstash Hybrid RRF scores are typically < 0.20) or Cosine similarity (0.0 - 1.0)
+  const isRRF = retrievedChunks.length > 0 && (retrievedChunks[0]?.score ?? 0) < 0.20;
   let candidateChunks: SourceItem[] = [];
-  if (highConfidenceChunks.length >= 2) {
-    candidateChunks = highConfidenceChunks;
-  } else {
-    // Relax threshold to >= 0.55 if fewer than 2 high-confidence chunks
-    candidateChunks = retrievedChunks.filter((c) => (c.score ?? 0) >= 0.55);
-  }
 
-  // If still empty but matches exist, include the top matching chunks
-  if (candidateChunks.length === 0 && retrievedChunks.length > 0) {
-    candidateChunks = retrievedChunks.slice(0, 3);
+  if (isRRF) {
+    // For Hybrid RRF, any match returned by Upstash meets relevance ranking
+    candidateChunks = retrievedChunks;
+  } else {
+    const highConfidenceChunks = retrievedChunks.filter((c) => (c.score ?? 0) >= 0.70);
+    if (highConfidenceChunks.length >= 2) {
+      candidateChunks = highConfidenceChunks;
+    } else {
+      candidateChunks = retrievedChunks.filter((c) => (c.score ?? 0) >= 0.55);
+    }
+    if (candidateChunks.length === 0 && retrievedChunks.length > 0) {
+      candidateChunks = retrievedChunks.slice(0, 3);
+    }
   }
 
   // 2. Context Continuity at Page Boundaries:
-  // If a high-confidence chunk is the last chunk of a page, check if the first chunk of the next page is in top-10
+  // If a high-confidence chunk is the last chunk of a page, check if the first chunk of the next page is in top-15
   const candidateIds = new Set(candidateChunks.map((c) => c.id));
   for (const chunk of [...candidateChunks]) {
     if (chunk.isLastChunkOfPage && chunk.docId) {
@@ -372,8 +413,7 @@ queriesRoute.post("/", async (c) => {
         (rc) =>
           rc.docId === chunk.docId &&
           rc.page === nextPage &&
-          rc.isFirstChunkOfPage &&
-          (rc.score ?? 0) >= 0.60,
+          rc.isFirstChunkOfPage,
       );
       if (nextPageFirstChunk && !candidateIds.has(nextPageFirstChunk.id)) {
         candidateChunks.push(nextPageFirstChunk);
@@ -382,29 +422,30 @@ queriesRoute.post("/", async (c) => {
     }
   }
 
-  // 3. Deduplication & Capping (5–7 chunks max)
-  const seenIds = new Set<string>();
+  // 3. Page-Level Deduplication & Capping (5–7 distinct pages max)
+  // Ensures we never return duplicate citations or duplicate text for the same page
+  const seenPages = new Set<string>();
   const deduplicatedChunks: SourceItem[] = [];
   for (const chunk of candidateChunks) {
-    const key = chunk.id || `${chunk.docId}#page${chunk.page}#chunk${chunk.chunkIndex}`;
-    if (!seenIds.has(key)) {
-      seenIds.add(key);
+    const pageKey = `${chunk.docId}#page${chunk.page}`;
+    if (!seenPages.has(pageKey)) {
+      seenPages.add(pageKey);
       deduplicatedChunks.push(chunk);
     }
   }
 
   const selectedChunks = deduplicatedChunks.slice(0, 7);
 
-  // 4. Reordering by Document Sequence: (docId, page, chunkIndex)
+  // 4. Reordering by Document Sequence: (docId, page)
   // Preserves natural reading order, avoids "relevance salad"
   selectedChunks.sort((a, b) => {
     if (a.docId !== b.docId) return a.docId.localeCompare(b.docId);
-    if (a.page !== b.page) return a.page - b.page;
-    return a.chunkIndex - b.chunkIndex;
+    return a.page - b.page;
   });
 
-  const notFoundMessage =
-    "I couldn't find relevant information in the provided documents to answer your question. Try rephrasing or asking something covered in your documents.";
+  const notFoundMessage = hasDocuments
+    ? "I couldn't find relevant information in the provided documents to answer your question. Try rephrasing or asking something covered in your documents."
+    : "No documents have been uploaded to this project yet. Please upload or attach documents first so I can analyze them and answer your questions.";
 
   // Zero-result Guardrail: If no chunks met the confidence threshold, return grounded message immediately without calling LLM
   if (selectedChunks.length === 0) {
@@ -425,6 +466,7 @@ queriesRoute.post("/", async (c) => {
             .values({
               userId,
               projectId: projectId ?? null,
+              sessionId: finalSessionId,
               question: question.trim(),
               answer: notFoundMessage,
               sources: [],
@@ -456,6 +498,7 @@ queriesRoute.post("/", async (c) => {
       .values({
         userId,
         projectId: projectId ?? null,
+        sessionId: finalSessionId,
         question: question.trim(),
         answer: notFoundMessage,
         sources: [],
@@ -474,6 +517,19 @@ queriesRoute.post("/", async (c) => {
     );
   }
 
+function normalizeRrfScore(rawScore: number): number {
+  if (rawScore <= 0) return 0;
+  if (rawScore >= 0.20) return Math.min(1, Math.round(rawScore * 100) / 100);
+  const maxRrf = 2 / 61;
+  const singleRank1 = 1 / 61;
+  if (rawScore >= singleRank1) {
+    const ratio = Math.min(1, (rawScore - singleRank1) / (maxRrf - singleRank1));
+    return Math.round((0.80 + ratio * 0.18) * 100) / 100;
+  }
+  const ratio = Math.max(0, rawScore / singleRank1);
+  return Math.round((0.60 + ratio * 0.20) * 100) / 100;
+}
+
   const mappedSources = selectedChunks.map((s) => ({
     docId: s.docId,
     title: s.docName,
@@ -484,7 +540,7 @@ queriesRoute.post("/", async (c) => {
     chunkIndex: s.chunkIndex,
     excerpt: s.snippet.length > 150 ? s.snippet.slice(0, 150) + "..." : s.snippet,
     text: s.snippet,
-    score: s.score ?? 0,
+    score: normalizeRrfScore(s.score ?? 0),
   }));
 
   const contextText = selectedChunks
