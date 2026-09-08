@@ -31,6 +31,13 @@ async function main() {
 
   console.log(\`[Upstash Box] Starting pipeline for doc: \${job.documentId} (\${job.fileName})\`);
 
+  const sarvamApiKey = job.sarvamApiKey || process.env.SARVAM_API_KEY;
+  const mistralApiKey = job.mistralApiKey || process.env.MISTRAL_API_KEY;
+  const vectorRestUrl = job.vectorRestUrl || process.env.UPSTASH_VECTOR_REST_URL;
+  const vectorRestToken = job.vectorRestToken || process.env.UPSTASH_VECTOR_REST_TOKEN;
+  const databaseUrl = job.databaseUrl || process.env.DATABASE_URL;
+  const databaseToken = job.databaseToken || process.env.TOKEN;
+
   try {
     // 1. Download file from presigned storage URL
     console.log("[Upstash Box] Downloading file from Tigris...");
@@ -49,7 +56,7 @@ async function main() {
     }
 
     // 2. Digitize document (Sarvam AI SDK OCR with local extractor fallback)
-    const pages = await digitizeDocument(buffer, job.fileName, job.mimeType, job.sarvamApiKey);
+    const pages = await digitizeDocument(buffer, job.fileName, job.mimeType, sarvamApiKey);
     console.log(\`[Upstash Box] Extracted \${pages.length} page(s)\`);
 
     // Validation: Extracted text length & non-printable character ratio
@@ -66,13 +73,13 @@ async function main() {
       }
     }
 
-    // 3. Chunk pages (Parent-Child Multi-Vector Chunking)
-    const chunks = chunkPages(pages);
+    // 3. Chunk pages (Parent-Child Multi-Vector Chunking with docId scoping)
+    const chunks = chunkPages(pages, job.documentId);
     console.log(\`[Upstash Box] Generated \${chunks.length} multi-vector chunk(s) across \${pages.length} page(s)\`);
 
     // 4. Generate Embeddings using official Mistral SDK with retrieval prefixes
     console.log("[Upstash Box] Generating embeddings via Mistral SDK...");
-    const embeddedChunks = await generateMistralEmbeddings(chunks, job.mistralApiKey);
+    const embeddedChunks = await generateMistralEmbeddings(chunks, mistralApiKey);
     console.log(\`[Upstash Box] Generated embeddings for \${embeddedChunks.length} chunks\`);
 
     // 5. Batch upsert vectors using official @upstash/vector SDK
@@ -104,15 +111,15 @@ async function main() {
       const batchSize = 50;
       for (let i = 0; i < vectorPayloads.length; i += batchSize) {
         const batch = vectorPayloads.slice(i, i + batchSize);
-        await upsertVectorBatch(batch, job.vectorRestUrl, job.vectorRestToken, 3, job.documentId, job.userId);
+        await upsertVectorBatch(batch, vectorRestUrl, vectorRestToken, 3, job.documentId, job.userId);
       }
       console.log(\`[Upstash Box] Indexed \${vectorPayloads.length} vectors successfully with deterministic IDs\`);
     }
 
     // 6. Update Turso document status using official LibSQL SDK
     await updateTursoStatus(
-      job.databaseUrl,
-      job.databaseToken,
+      databaseUrl,
+      databaseToken,
       job.documentId,
       "processed",
       chunks.length
@@ -122,8 +129,8 @@ async function main() {
     console.error("[Upstash Box] Pipeline failed:", err);
     try {
       await updateTursoStatus(
-        job.databaseUrl,
-        job.databaseToken,
+        databaseUrl,
+        databaseToken,
         job.documentId,
         "error",
         0
@@ -383,7 +390,7 @@ function normalizePages(pages) {
   return normalized;
 }
 
-function chunkPages(rawPages) {
+function chunkPages(rawPages, docId = "") {
   const TARGET_CHARS = 1850;
   const MIN_CHARS = 200;
   const MAX_CHARS = 6000; // Enforce strict bound well under Mistral 8192 token limit
@@ -401,6 +408,7 @@ function chunkPages(rawPages) {
     // Small page (< TARGET_CHARS) kept intact as single parent chunk
     if (pageText.length <= TARGET_CHARS) {
       allChunks.push({
+        id: (docId ? docId + "#" : "") + "page" + pageNum + "#chunk0",
         type: "parent",
         parentId: null,
         page: pageNum,
@@ -414,7 +422,7 @@ function chunkPages(rawPages) {
     }
 
     // Embed the full page (capped to safe limit) as a Parent chunk
-    const parentId = "parent-page-" + pageNum;
+    const parentId = (docId ? docId + "#" : "") + "parent-page-" + pageNum;
     allChunks.push({
       id: parentId,
       type: "parent",

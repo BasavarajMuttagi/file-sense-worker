@@ -1,4 +1,4 @@
-import { Box } from "@upstash/box";
+import { EphemeralBox } from "@upstash/box";
 import { eq } from "drizzle-orm";
 
 import { documents, getDb } from "../db/index.js";
@@ -14,75 +14,9 @@ export interface DocumentProcessingJob {
   mimeType: string;
 }
 
-const DEFAULT_BOX_NAME = "filesense-pipeline";
-
 /**
- * Gets an existing Upstash Box or provisions a new one.
- */
-export async function getOrCreateProcessingBox(env: Env): Promise<Box | null> {
-  const apiKey = env.UPSTASH_BOX_API_KEY;
-  if (!apiKey) {
-    return null;
-  }
-
-  const boxName = DEFAULT_BOX_NAME;
-
-  let box: Box | null = null;
-  try {
-    box = await Box.getByName(boxName, { apiKey });
-  } catch {
-    // Box doesn't exist yet
-  }
-
-  if (!box) {
-    try {
-      box = await Box.create({
-        name: boxName,
-        runtime: "node",
-        size: "small",
-        apiKey,
-      });
-    } catch (createErr) {
-      console.error("[Upstash Box] Failed to create box:", createErr);
-      return null;
-    }
-  }
-
-  // Ensure SDK dependencies are installed in this box
-  try {
-    const check = await box.exec.command("node -e 'import(\"sarvamai\")'");
-    if (check.exitCode !== 0) {
-      console.log("[Upstash Box] Dependencies not found in box. Writing package.json and running npm install...");
-      await box.files.write({
-        path: "package.json",
-        content: JSON.stringify(
-          {
-            name: "filesense-box-runner",
-            type: "module",
-            dependencies: {
-              sarvamai: "^1.1.9",
-              "@mistralai/mistralai": "^2.6.4",
-              "@upstash/vector": "^1.2.3",
-              "@libsql/client": "^0.18.0",
-              "pdf-parse": "^1.1.4",
-            },
-          },
-          null,
-          2,
-        ),
-      });
-      const installRes = await box.exec.command("npm install");
-      console.log(`[Upstash Box] npm install finished with code ${installRes.exitCode}`);
-    }
-  } catch (checkErr) {
-    console.warn("[Upstash Box] Dependency check warning:", checkErr);
-  }
-
-  return box;
-}
-
-/**
- * Dispatches a document to Upstash Box for downloading, OCR, chunking, and vector indexing.
+ * Dispatches a document to an isolated EphemeralBox for downloading, OCR, chunking, and vector indexing.
+ * API keys and database credentials are injected securely via process.env into the container.
  */
 export async function dispatchDocumentProcessing(
   env: Env,
@@ -96,6 +30,8 @@ export async function dispatchDocumentProcessing(
     );
     return;
   }
+
+  let box: EphemeralBox | null = null;
 
   try {
     // 1. Generate presigned download URL for the uploaded document
@@ -111,19 +47,56 @@ export async function dispatchDocumentProcessing(
       );
     }
 
-    // 2. Connect to / create the Upstash Box instance
-    const box = await getOrCreateProcessingBox(env);
-    if (!box) {
-      throw new Error("Unable to obtain Upstash Box instance");
+    // 2. Create an isolated EphemeralBox with credentials injected into environment variables
+    box = await EphemeralBox.create({
+      runtime: "node",
+      size: "small",
+      ttl: 600, // 10 minutes auto-delete guarantee
+      apiKey: env.UPSTASH_BOX_API_KEY,
+      env: {
+        SARVAM_API_KEY: env.SARVAM_API_KEY ?? "",
+        MISTRAL_API_KEY: env.MISTRAL_API_KEY ?? "",
+        UPSTASH_VECTOR_REST_URL: env.UPSTASH_VECTOR_REST_URL ?? "",
+        UPSTASH_VECTOR_REST_TOKEN: env.UPSTASH_VECTOR_REST_TOKEN ?? "",
+        DATABASE_URL: env.DATABASE_URL ?? "",
+        TOKEN: env.TOKEN ?? "",
+      },
+    });
+
+    console.log(`[EphemeralBox] Provisioned box ${box.id} for doc ${job.documentId}`);
+
+    // 3. Write package.json and install SDK dependencies
+    await box.files.write({
+      path: "package.json",
+      content: JSON.stringify(
+        {
+          name: "filesense-box-runner",
+          type: "module",
+          dependencies: {
+            sarvamai: "^1.1.9",
+            "@mistralai/mistralai": "^2.6.4",
+            "@upstash/vector": "^1.2.3",
+            "@libsql/client": "^0.18.0",
+            "pdf-parse": "^1.1.4",
+          },
+        },
+        null,
+        2,
+      ),
+    });
+
+    const installRes = await box.exec.command("npm install --no-audit --no-fund");
+    if (installRes.exitCode !== 0) {
+      throw new Error(`npm install failed with code ${installRes.exitCode}: ${installRes.stderr}`);
     }
 
-    // 3. Ensure pipeline-runner.mjs is present in the box
+    // 4. Write runner script
     await box.files.write({
       path: "pipeline-runner.mjs",
       content: PIPELINE_RUNNER_SCRIPT,
     });
 
-    // 4. Prepare and write job specification to box
+    // 5. Write only non-sensitive job parameters (no secrets on disk!)
     const jobFileName = `job-${job.documentId}.json`;
     const payload = {
       documentId: job.documentId,
@@ -132,12 +105,6 @@ export async function dispatchDocumentProcessing(
       projectId: job.projectId,
       fileName: job.fileName,
       mimeType: job.mimeType,
-      sarvamApiKey: env.SARVAM_API_KEY,
-      mistralApiKey: env.MISTRAL_API_KEY,
-      vectorRestUrl: env.UPSTASH_VECTOR_REST_URL,
-      vectorRestToken: env.UPSTASH_VECTOR_REST_TOKEN,
-      databaseUrl: env.DATABASE_URL,
-      databaseToken: env.TOKEN,
     };
 
     await box.files.write({
@@ -145,27 +112,26 @@ export async function dispatchDocumentProcessing(
       content: JSON.stringify(payload),
     });
 
-    console.log(`[Upstash Box] Dispatched job ${job.documentId} to box ${box.id}`);
+    console.log(`[EphemeralBox] Running pipeline for job ${job.documentId}...`);
 
-    // 5. Execute runner script inside Box
+    // 6. Execute runner script inside the EphemeralBox
     const run = await box.exec.command(`node pipeline-runner.mjs ${jobFileName}`);
 
     console.log(
-      `[Upstash Box] Run finished with exitCode ${run.exitCode}. Output:\n${run.stdout}`,
+      `[EphemeralBox] Run finished with exitCode ${run.exitCode}. Output:\n${run.stdout}`,
     );
 
     if (run.exitCode !== 0) {
-      console.error(`[Upstash Box] Run failed with stderr:\n${run.stderr}`);
+      console.error(`[EphemeralBox] Run failed with stderr:\n${run.stderr}`);
       await db
         .update(documents)
         .set({ status: "error" })
         .where(eq(documents.id, job.documentId));
+    } else {
+      console.log(`[EphemeralBox] Successfully processed document ${job.documentId}`);
     }
-
-    // 6. Clean up temporary job file
-    await box.files.remove(jobFileName).catch(() => { });
   } catch (err: unknown) {
-    console.error(`[Upstash Box] Processing failed for doc ${job.documentId}:`, err);
+    console.error(`[EphemeralBox] Processing failed for doc ${job.documentId}:`, err);
     try {
       await db
         .update(documents)
@@ -173,6 +139,11 @@ export async function dispatchDocumentProcessing(
         .where(eq(documents.id, job.documentId));
     } catch (dbErr) {
       console.error("Failed to update document status to error:", dbErr);
+    }
+  } finally {
+    // 7. Explicit cleanup: Delete the ephemeral box immediately upon finish
+    if (box) {
+      await box.delete().catch(() => {});
     }
   }
 }
