@@ -11,6 +11,12 @@ vi.mock("../../src/db/index.js", () => ({
 
 vi.mock("@tigrisdata/storage", () => ({
   handleClientUpload: vi.fn(),
+  UploadAction: {
+    SinglepartInit: "singlepart-init",
+    MultipartInit: "multipart-init",
+    MultipartGetParts: "multipart-get-parts",
+    MultipartComplete: "multipart-complete",
+  },
 }));
 
 import { handleClientUpload } from "@tigrisdata/storage";
@@ -105,6 +111,7 @@ describe("Upload Route: /api/upload", () => {
     expect(res.status).toBe(200);
     expect(handleClientUpload).toHaveBeenCalledWith(
       expect.objectContaining({
+        action: "singlepart-init",
         name: expect.stringMatching(
           /^user_test_123\/projects\/proj_123\/\d+-my_test_document\.pdf$/,
         ),
@@ -112,6 +119,45 @@ describe("Upload Route: /api/upload", () => {
       expect.objectContaining({
         bucket: "mock-bucket",
       }),
+    );
+  });
+
+  it("does not forward unvalidated arbitrary fields to handleClientUpload", async () => {
+    mockDb.select.mockReturnValue({
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue([{ id: "proj_123" }]),
+    });
+
+    const res = await app.request(
+      "/api/upload",
+      {
+        method: "POST",
+        headers: new Headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          projectId: "proj_123",
+          name: "contract.pdf",
+          contentType: "application/pdf",
+          maliciousField: "attack_payload",
+          randomSecret: 12345,
+        }),
+      },
+      MOCK_ENV,
+    );
+
+    expect(res.status).toBe(200);
+    expect(handleClientUpload).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        maliciousField: "attack_payload",
+        randomSecret: 12345,
+      }),
+      expect.any(Object),
+    );
+    expect(handleClientUpload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentType: "application/pdf",
+      }),
+      expect.any(Object),
     );
   });
 });

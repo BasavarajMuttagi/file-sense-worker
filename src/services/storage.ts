@@ -1,4 +1,4 @@
-import { getPresignedUrl, remove } from "@tigrisdata/storage";
+import { getPresignedUrl, remove, type TigrisConfig } from "@tigrisdata/storage";
 
 export interface TigrisEnv {
   TIGRIS_STORAGE_ACCESS_KEY_ID?: string;
@@ -8,7 +8,7 @@ export interface TigrisEnv {
   TIGRIS_STORAGE_BUCKET?: string;
 }
 
-export function getTigrisConfig(env: TigrisEnv) {
+export function getTigrisConfig(env: TigrisEnv): TigrisConfig & { bucket: string } {
   const bucket =
     env.TIGRIS_STORAGE_BUCKET ||
     env.TIGRIS_BUCKET_NAME ||

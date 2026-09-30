@@ -8,6 +8,7 @@ import { getDb, projects, queries, documents } from "../db/index.js";
 import { getVectorIndex } from "../services/vector.js";
 import { FusionAlgorithm } from "@upstash/vector";
 import {
+  type ChatMessage,
   createQuerySchema,
   listQueriesQuerySchema,
   queryIdParamSchema,
@@ -29,11 +30,6 @@ interface SourceItem {
   score?: number;
   isFirstChunkOfPage?: boolean;
   isLastChunkOfPage?: boolean;
-}
-
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
 }
 
 const defaultPrompt = `You are FileSense AI, a precision research assistant answering questions using ONLY the provided numbered sources.
@@ -134,7 +130,7 @@ queriesRoute.post("/", async (c) => {
     throw new HTTPException(401, { message: "Unauthorized" });
   }
 
-  const body: unknown = await c.req.json().catch(() => null);
+  const body = await c.req.json();
   const parsed = createQuerySchema.safeParse(body);
   if (!parsed.success) {
     throw new HTTPException(400, {
@@ -279,7 +275,7 @@ queriesRoute.post("/", async (c) => {
     }
   }
 
-  const mistralApiKey = (c.env as unknown as Record<string, unknown>).MISTRAL_API_KEY as string | undefined;
+  const mistralApiKey = c.env.MISTRAL_API_KEY;
 
   let retrievedChunks: SourceItem[] = [];
 
@@ -331,7 +327,7 @@ queriesRoute.post("/", async (c) => {
         isLastChunkOfPage: (match.metadata?.isLastChunkOfPage as boolean) ?? false,
       };
     });
-  } catch (err: unknown) {
+  } catch (err) {
     console.error("Upstash hybrid vector search failed:", err);
   }
 
@@ -612,7 +608,7 @@ function normalizeRrfScore(rawScore: number): number {
         instructionToPass,
         history,
       );
-    } catch (llmErr: unknown) {
+    } catch (llmErr) {
       console.error("Mistral synthesis error:", llmErr);
     }
   }

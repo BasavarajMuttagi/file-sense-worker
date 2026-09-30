@@ -80,17 +80,7 @@ export const queries = sqliteTable(
     sessionId: text("session_id"),
     question: text("question").notNull(),
     answer: text("answer"),
-    sources: text("sources", { mode: "json" }).$type<
-      Array<{
-        title: string;
-        fileName: string;
-        chunkIndex: number;
-        text: string;
-        score: number;
-        pageStart?: number | null;
-        pageEnd?: number | null;
-      }>
-    >(),
+    sources: text("sources", { mode: "json" }).$type<QuerySource[]>(),
     createdAt: integer("created_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),
@@ -143,3 +133,13 @@ export type NewDocument = typeof documents.$inferInsert;
 
 export type Query = typeof queries.$inferSelect;
 export type NewQuery = typeof queries.$inferInsert;
+
+export interface QuerySource {
+  title: string;
+  fileName: string;
+  chunkIndex: number;
+  text: string;
+  score: number;
+  pageStart?: number | null;
+  pageEnd?: number | null;
+}

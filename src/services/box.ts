@@ -117,7 +117,7 @@ export async function dispatchDocumentProcessing(
     } else {
       console.log(`[EphemeralBox] Successfully processed document ${job.documentId}`);
     }
-  } catch (err: unknown) {
+  } catch (err) {
     console.error(`[EphemeralBox] Processing failed for doc ${job.documentId}:`, err);
     try {
       await db

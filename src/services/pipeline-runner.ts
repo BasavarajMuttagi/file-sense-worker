@@ -41,10 +41,10 @@ async function main() {
     const buffer = Buffer.from(arrayBuffer);
     console.log(\`[Upstash Box] Download complete (\${buffer.length} bytes)\`);
 
-    // Validation: File size check < 50MB
-    const MAX_FILE_SIZE = 50 * 1024 * 1024;
+    // Validation: File size check <= 25MB
+    const MAX_FILE_SIZE = 25 * 1024 * 1024;
     if (buffer.length > MAX_FILE_SIZE) {
-      throw new Error(\`Document exceeds maximum size limit of 50MB (\${(buffer.length / (1024 * 1024)).toFixed(1)}MB)\`);
+      throw new Error(\`Document exceeds maximum size limit of 25MB (\${(buffer.length / (1024 * 1024)).toFixed(1)}MB)\`);
     }
 
     // 2. Digitize document with Sarvam AI Doc AI OCR

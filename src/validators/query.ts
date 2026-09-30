@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+export const chatMessageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().trim().max(10000),
+});
+
+export type ChatMessage = z.infer<typeof chatMessageSchema>;
+
 export const createQuerySchema = z.object({
   question: z
     .string()
@@ -11,14 +18,7 @@ export const createQuerySchema = z.object({
   systemInstruction: z.string().trim().max(8000).optional().nullable(),
   systemPrompt: z.string().trim().max(8000).optional().nullable(),
   stream: z.boolean().optional(),
-  history: z
-    .array(
-      z.object({
-        role: z.enum(["user", "assistant"]),
-        content: z.string().trim().max(10000),
-      }),
-    )
-    .optional(),
+  history: z.array(chatMessageSchema).optional(),
 });
 
 export const listQueriesQuerySchema = z.object({

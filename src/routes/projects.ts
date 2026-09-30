@@ -19,7 +19,7 @@ projectsRoute.post("/", async (c) => {
     throw new HTTPException(401, { message: "Unauthorized" });
   }
 
-  const body: unknown = await c.req.json().catch(() => null);
+  const body = await c.req.json();
   const parsed = createProjectSchema.safeParse(body);
   if (!parsed.success) {
     throw new HTTPException(400, {
@@ -184,7 +184,7 @@ projectsRoute.delete("/:id", async (c) => {
     await vectorIndex.delete({
       filter: `projectId = '${project.id}' AND userId = '${userId}'`,
     });
-  } catch (err: unknown) {
+  } catch (err) {
     console.error("Failed to delete project vector chunks:", err);
   }
 

@@ -146,7 +146,7 @@ documentsRoute.delete("/:id", async (c) => {
   try {
     const vectorIndex = getVectorIndex(c.env);
     await vectorIndex.delete({ filter: `docId = '${docWithProject.id}'` });
-  } catch (err: unknown) {
+  } catch (err) {
     console.error("Failed to delete document vector chunks:", err);
   }
 

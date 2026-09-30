@@ -16,10 +16,13 @@ uploadRoute.post("/", async (c) => {
     throw new HTTPException(401, { message: "Unauthorized" });
   }
 
+  const rawBody = await c.req.json();
+  const rawObject = typeof rawBody === "object" && rawBody !== null ? rawBody : {};
   const queryProjectId = c.req.query("projectId");
-  const rawBody: unknown = await c.req.json().catch(() => ({}));
-  const body = typeof rawBody === "object" && rawBody !== null ? { projectId: queryProjectId, ...rawBody } : { projectId: queryProjectId };
-  const parsed = uploadSchema.safeParse(body);
+  const parsed = uploadSchema.safeParse({
+    projectId: queryProjectId,
+    ...rawObject,
+  });
   if (!parsed.success) {
     throw new HTTPException(400, {
       message:
@@ -27,7 +30,7 @@ uploadRoute.post("/", async (c) => {
     });
   }
 
-  const { projectId, name: fileName } = parsed.data;
+  const { projectId, name: fileName, action, contentType } = parsed.data;
 
   const db = getDb(c.env);
   const [project] = await db
@@ -44,26 +47,14 @@ uploadRoute.post("/", async (c) => {
   const safeFileName = fileName.replace(/[^a-z0-9.-]/gi, "_");
   const storagePath = `${userId}/projects/${projectId}/${timestamp}-${safeFileName}`;
 
-  const payload =
-    typeof body === "object" && body !== null
-      ? (body as Record<string, unknown>)
-      : {};
-
   const tigrisConfig = getTigrisConfig(c.env);
 
-  const modifiedBody = {
-    ...payload,
-    name: storagePath,
-    config: {
-      ...(typeof payload.config === "object" && payload.config !== null
-        ? payload.config
-        : {}),
-      ...tigrisConfig,
-    },
-  };
-
   const uploadResult = await handleClientUpload(
-    modifiedBody as unknown as Parameters<typeof handleClientUpload>[0],
+    {
+      action,
+      name: storagePath,
+      contentType,
+    },
     tigrisConfig,
   );
   if (uploadResult.error) {
