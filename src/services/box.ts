@@ -47,7 +47,7 @@ export async function dispatchDocumentProcessing(
       );
     }
 
-    // 2. Create an isolated EphemeralBox with credentials injected into environment variables
+    // 2. Create an isolated EphemeralBox with credentials and parameters injected into environment variables
     box = await EphemeralBox.create({
       runtime: "node",
       size: "small",
@@ -55,11 +55,16 @@ export async function dispatchDocumentProcessing(
       apiKey: env.UPSTASH_BOX_API_KEY,
       env: {
         SARVAM_API_KEY: env.SARVAM_API_KEY ?? "",
-        MISTRAL_API_KEY: env.MISTRAL_API_KEY ?? "",
         UPSTASH_VECTOR_REST_URL: env.UPSTASH_VECTOR_REST_URL ?? "",
         UPSTASH_VECTOR_REST_TOKEN: env.UPSTASH_VECTOR_REST_TOKEN ?? "",
         DATABASE_URL: env.DATABASE_URL ?? "",
-        TOKEN: env.TOKEN ?? "",
+        DATABASE_TOKEN: env.TOKEN ?? "",
+        DOCUMENT_ID: job.documentId,
+        DOWNLOAD_URL: downloadUrl,
+        USER_ID: job.userId,
+        PROJECT_ID: job.projectId,
+        FILE_NAME: job.fileName,
+        MIME_TYPE: job.mimeType,
       },
     });
 
@@ -76,7 +81,6 @@ export async function dispatchDocumentProcessing(
             sarvamai: "^1.1.9",
             "@upstash/vector": "^1.2.3",
             "@libsql/client": "^0.18.0",
-            "pdf-parse": "^1.1.4",
           },
         },
         null,
@@ -95,26 +99,10 @@ export async function dispatchDocumentProcessing(
       content: PIPELINE_RUNNER_SCRIPT,
     });
 
-    // 5. Write only non-sensitive job parameters (no secrets on disk!)
-    const jobFileName = `job-${job.documentId}.json`;
-    const payload = {
-      documentId: job.documentId,
-      downloadUrl,
-      userId: job.userId,
-      projectId: job.projectId,
-      fileName: job.fileName,
-      mimeType: job.mimeType,
-    };
+    console.log(`[EphemeralBox] Running pipeline for doc ${job.documentId}...`);
 
-    await box.files.write({
-      path: jobFileName,
-      content: JSON.stringify(payload),
-    });
-
-    console.log(`[EphemeralBox] Running pipeline for job ${job.documentId}...`);
-
-    // 6. Execute runner script inside the EphemeralBox
-    const run = await box.exec.command(`node pipeline-runner.mjs ${jobFileName}`);
+    // 5. Execute runner script inside the EphemeralBox
+    const run = await box.exec.command("node pipeline-runner.mjs");
 
     console.log(
       `[EphemeralBox] Run finished with exitCode ${run.exitCode}. Output:\n${run.stdout}`,

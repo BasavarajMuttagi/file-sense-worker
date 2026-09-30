@@ -8,39 +8,32 @@
  */
 export const PIPELINE_RUNNER_SCRIPT = `import fs from "node:fs/promises";
 import nodeFs from "node:fs";
-import zlib from "node:zlib";
-import pdfParse from "pdf-parse";
 import { SarvamAIClient } from "sarvamai";
 import { Index } from "@upstash/vector";
 import { createClient } from "@libsql/client/web";
 
 async function main() {
-  const jobArg = process.argv[2];
-  let job;
+  const documentId = process.env.DOCUMENT_ID;
+  const downloadUrl = process.env.DOWNLOAD_URL;
+  const userId = process.env.USER_ID || "";
+  const projectId = process.env.PROJECT_ID || "";
+  const fileName = process.env.FILE_NAME || "document";
+  const mimeType = process.env.MIME_TYPE || "application/octet-stream";
 
-  if (jobArg && jobArg.startsWith("{")) {
-    job = JSON.parse(jobArg);
-  } else if (jobArg) {
-    const raw = await fs.readFile(jobArg, "utf-8");
-    job = JSON.parse(raw);
-  } else {
-    const raw = await fs.readFile("job.json", "utf-8");
-    job = JSON.parse(raw);
+  const sarvamApiKey = process.env.SARVAM_API_KEY;
+  const vectorRestUrl = process.env.UPSTASH_VECTOR_REST_URL;
+  const vectorRestToken = process.env.UPSTASH_VECTOR_REST_TOKEN;
+  const databaseUrl = process.env.DATABASE_URL;
+  const databaseToken = process.env.DATABASE_TOKEN || process.env.TOKEN;
+
+  if (!documentId || !downloadUrl) {
+    throw new Error("Missing required DOCUMENT_ID or DOWNLOAD_URL in environment");
   }
-
-  console.log(\`[Upstash Box] Starting pipeline for doc: \${job.documentId} (\${job.fileName})\`);
-
-  const sarvamApiKey = job.sarvamApiKey || process.env.SARVAM_API_KEY;
-  const mistralApiKey = job.mistralApiKey || process.env.MISTRAL_API_KEY;
-  const vectorRestUrl = job.vectorRestUrl || process.env.UPSTASH_VECTOR_REST_URL;
-  const vectorRestToken = job.vectorRestToken || process.env.UPSTASH_VECTOR_REST_TOKEN;
-  const databaseUrl = job.databaseUrl || process.env.DATABASE_URL;
-  const databaseToken = job.databaseToken || process.env.TOKEN;
 
   try {
     // 1. Download file from presigned storage URL
     console.log("[Upstash Box] Downloading file from Tigris...");
-    const downloadRes = await fetch(job.downloadUrl);
+    const downloadRes = await fetch(downloadUrl);
     if (!downloadRes.ok) {
       throw new Error(\`Failed to download file from storage (\${downloadRes.status}): \${await downloadRes.text()}\`);
     }
@@ -54,8 +47,8 @@ async function main() {
       throw new Error(\`Document exceeds maximum size limit of 50MB (\${(buffer.length / (1024 * 1024)).toFixed(1)}MB)\`);
     }
 
-    // 2. Digitize document (Sarvam AI SDK OCR with local extractor fallback)
-    const pages = await digitizeDocument(buffer, job.fileName, job.mimeType, sarvamApiKey);
+    // 2. Digitize document with Sarvam AI Doc AI OCR
+    const pages = await digitizeDocument(buffer, fileName, mimeType, sarvamApiKey);
     console.log(\`[Upstash Box] Extracted \${pages.length} page(s)\`);
 
     // Validation: Extracted text length & non-printable character ratio
@@ -73,7 +66,7 @@ async function main() {
     }
 
     // 3. Chunk pages (Semantic document chunking with docId scoping)
-    const chunks = chunkPages(pages, job.documentId);
+    const chunks = chunkPages(pages, documentId);
     console.log(\`[Upstash Box] Generated \${chunks.length} chunk(s) across \${pages.length} page(s)\`);
 
     // 4. Batch upsert vectors using official @upstash/vector SDK with automatic Hybrid (Dense + BM25) embedding
@@ -81,13 +74,13 @@ async function main() {
       console.log("[Upstash Box] Upserting chunks to Upstash Vector in batch (Hybrid Dense + BM25)...");
       const uploadedAt = new Date().toISOString();
       const vectorPayloads = chunks.map((chunk) => ({
-        id: chunk.id || \`\${job.documentId}#page\${chunk.page}#chunk\${chunk.chunkIndex}\`,
+        id: chunk.id || \`\${documentId}#page\${chunk.page}#chunk\${chunk.chunkIndex}\`,
         data: chunk.text,
         metadata: {
-          userId: job.userId,
-          projectId: job.projectId,
-          docId: job.documentId,
-          docName: job.fileName,
+          userId,
+          projectId,
+          docId: documentId,
+          docName: fileName,
           page: chunk.page,
           pageStart: chunk.page,
           pageEnd: chunk.page,
@@ -101,30 +94,35 @@ async function main() {
         },
       }));
 
+      const index = new Index({
+        url: vectorRestUrl,
+        token: vectorRestToken,
+      });
+
       const batchSize = 50;
       for (let i = 0; i < vectorPayloads.length; i += batchSize) {
         const batch = vectorPayloads.slice(i, i + batchSize);
-        await upsertVectorBatch(batch, vectorRestUrl, vectorRestToken, 3, job.documentId, job.userId);
+        await index.upsert(batch);
       }
       console.log(\`[Upstash Box] Indexed \${vectorPayloads.length} vectors successfully with deterministic IDs\`);
     }
 
-    // 6. Update Turso document status using official LibSQL SDK
+    // 5. Update Turso document status using official LibSQL SDK
     await updateTursoStatus(
       databaseUrl,
       databaseToken,
-      job.documentId,
+      documentId,
       "processed",
       chunks.length
     );
-    console.log(\`[Upstash Box] Document \${job.documentId} marked as processed\`);
+    console.log(\`[Upstash Box] Document \${documentId} marked as processed\`);
   } catch (err) {
     console.error("[Upstash Box] Pipeline failed:", err);
     try {
       await updateTursoStatus(
         databaseUrl,
         databaseToken,
-        job.documentId,
+        documentId,
         "error",
         0
       );
@@ -136,20 +134,12 @@ async function main() {
 }
 
 async function digitizeDocument(buffer, fileName, mimeType, sarvamApiKey) {
-  if (sarvamApiKey) {
-    try {
-      console.log("[Upstash Box] Attempting Sarvam AI Doc AI OCR via SDK...");
-      const sarvamPages = await callSarvamDigitize(buffer, fileName, mimeType, sarvamApiKey);
-      if (sarvamPages.length > 0) {
-        return sarvamPages;
-      }
-    } catch (err) {
-      console.warn("[Upstash Box] Sarvam AI OCR failed, falling back to local extractor:", err.message || err);
-    }
+  if (!sarvamApiKey) {
+    throw new Error("SARVAM_API_KEY is required for document digitization");
   }
 
-  console.log("[Upstash Box] Running local text extraction...");
-  return await extractTextLocally(buffer, mimeType);
+  console.log("[Upstash Box] Digitizing document with Sarvam Doc AI OCR...");
+  return await callSarvamDigitize(buffer, fileName, mimeType, sarvamApiKey);
 }
 
 async function callSarvamDigitize(buffer, fileName, mimeType, apiKey) {
@@ -231,126 +221,11 @@ async function callSarvamDigitize(buffer, fileName, mimeType, apiKey) {
     }
   }
 
+  if (parsedPages.length === 0) {
+    throw new Error("Sarvam Doc AI returned zero readable pages");
+  }
+
   return parsedPages;
-}
-
-async function extractTextLocally(buffer, mimeType) {
-  if (mimeType.includes("text") || mimeType.includes("json")) {
-    const text = buffer.toString("utf-8");
-    return [{ pageNumber: 1, text }];
-  }
-
-  if (mimeType.includes("pdf") || buffer.slice(0, 5).toString() === "%PDF-") {
-    try {
-      const parseFunc = typeof pdfParse === "function" ? pdfParse : (pdfParse?.default || pdfParse);
-      if (typeof parseFunc === "function") {
-        const pages = [];
-        await parseFunc(buffer, {
-          pagerender: async (pageData) => {
-            const textContent = await pageData.getTextContent();
-            let lastY, text = "";
-            for (const item of textContent.items) {
-              if (lastY === item.transform[5] || !lastY) {
-                text += item.str;
-              } else {
-                text += "\\n" + item.str;
-              }
-              lastY = item.transform[5];
-            }
-            const trimmed = text.trim();
-            if (trimmed) {
-              pages.push({
-                pageNumber: pageData.pageIndex + 1,
-                text: trimmed,
-              });
-            }
-            return text;
-          }
-        });
-        if (pages.length > 0) {
-          console.log(\`[Upstash Box] Local PDF extractor parsed \${pages.length} page(s)\`);
-          return pages;
-        }
-      }
-    } catch (pdfErr) {
-      console.warn("[Upstash Box] pdf-parse failed, falling back to stream extractor:", pdfErr?.message || pdfErr);
-    }
-  }
-
-  const pages = [];
-  const content = buffer.toString("binary");
-
-  const streamRegex = /stream[\\r\\n]+([\\s\\S]*?)[\\r\\n]+endstream/g;
-  let match = null;
-  let streamCount = 0;
-
-  while ((match = streamRegex.exec(content)) !== null) {
-    const rawStream = match[1];
-    if (!rawStream) continue;
-
-    let decompressed = null;
-    try {
-      const streamBuf = Buffer.from(rawStream, "binary");
-      decompressed = zlib.inflateSync(streamBuf).toString("utf-8");
-    } catch {
-      try {
-        const streamBuf = Buffer.from(rawStream, "binary");
-        decompressed = zlib.inflateRawSync(streamBuf).toString("utf-8");
-      } catch {
-        decompressed = null;
-      }
-    }
-
-    const textToScan = decompressed ?? rawStream;
-    const textPieces = extractPdfTextTokens(textToScan);
-    if (textPieces.length > 0) {
-      const pageText = textPieces.join(" ").trim();
-      if (pageText.length > 5) {
-        streamCount++;
-        pages.push({ pageNumber: streamCount, text: pageText });
-      }
-    }
-  }
-
-  const validPages = pages.filter((p) => (p.text || "").trim().length >= 10);
-  if (validPages.length > 0) {
-    return validPages;
-  }
-
-  const cleaned = buffer
-    .toString("utf-8")
-    .replace(/[^\\x20-\\x7E\\n\\r\\t]/g, " ")
-    .replace(/\\s+/g, " ")
-    .trim();
-  if (cleaned.length >= 10) {
-    return [{ pageNumber: 1, text: cleaned }];
-  }
-
-  return [];
-}
-
-function extractPdfTextTokens(content) {
-  const tokens = [];
-  const tjRegex = /\\(([^)]*)\\)\\s*Tj/g;
-  let match = null;
-
-  while ((match = tjRegex.exec(content)) !== null) {
-    if (match[1]) tokens.push(match[1]);
-  }
-
-  const tjArrayRegex = /\\[([^\\]]*)\\]\\s*TJ/g;
-  while ((match = tjArrayRegex.exec(content)) !== null) {
-    if (match[1]) {
-      const innerMatches = match[1].match(/\\(([^)]*)\\)/g);
-      if (innerMatches) {
-        for (const item of innerMatches) {
-          tokens.push(item.slice(1, -1));
-        }
-      }
-    }
-  }
-
-  return tokens;
 }
 
 function normalizePages(pages) {
@@ -557,28 +432,6 @@ function chunkPages(rawPages, docId = "") {
   }
 
   return allChunks;
-}
-
-async function upsertVectorBatch(batch, vectorRestUrl, vectorRestToken, maxRetries = 3, docId = "", userId = "") {
-  const index = new Index({
-    url: vectorRestUrl,
-    token: vectorRestToken,
-  });
-
-  let attempt = 0;
-  while (attempt < maxRetries) {
-    try {
-      await index.upsert(batch);
-      return;
-    } catch (err) {
-      const msg = err?.message || String(err);
-      attempt++;
-      console.error(\`[Upstash Vector] Upsert attempt \${attempt} failed for docId: \${docId}, userId: \${userId}:\`, msg);
-      if (attempt >= maxRetries) throw err;
-      const backoffMs = Math.pow(2, attempt) * 1000;
-      await new Promise((r) => setTimeout(r, backoffMs));
-    }
-  }
 }
 
 async function updateTursoStatus(databaseUrl, databaseToken, documentId, status, chunkCount) {

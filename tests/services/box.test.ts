@@ -98,12 +98,12 @@ describe("Box Service: dispatchDocumentProcessing", () => {
         apiKey: env.UPSTASH_BOX_API_KEY,
       }),
     );
-    expect(mockBoxInstance.files.write).toHaveBeenCalledTimes(3); // package.json, runner script, job file
+    expect(mockBoxInstance.files.write).toHaveBeenCalledTimes(2); // package.json, runner script
     expect(mockBoxInstance.exec.command).toHaveBeenCalledWith(
       "npm install --no-audit --no-fund",
     );
     expect(mockBoxInstance.exec.command).toHaveBeenCalledWith(
-      "node pipeline-runner.mjs job-doc_test_1.json",
+      "node pipeline-runner.mjs",
     );
     expect(mockBoxInstance.delete).toHaveBeenCalled();
   });

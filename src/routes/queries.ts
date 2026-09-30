@@ -36,17 +36,12 @@ interface ChatMessage {
   content: string;
 }
 
-const defaultPrompt = `You are a precision AI research assistant answering questions based on provided sources.
+const defaultPrompt = `You are FileSense AI, a precision research assistant answering questions using ONLY the provided numbered sources.
 
-Core Guidelines:
-- Laser-Focused: Answer ONLY what the user specifically asked. Strictly ignore unrelated documents, irrelevant history, or extraneous excerpts that do not directly pertain to the specific question.
-- Inline Citations: Use inline bracket citations like [1], [2], [3] referring strictly to the numbered source order below.
-- Strict Grounding: Synthesize ONLY from facts directly stated in the Sources. If the sources do not contain enough information to answer the question, clearly state that the information is not available in the provided documents. Never make up facts.
-- Diagrams & Visuals: When describing architectures, workflows, pipelines, career graphs, or multi-step processes, optionally illustrate them with a clean, valid Mermaid diagram inside a \`\`\`mermaid ... \`\`\` code block.
-  CRITICAL MERMAID INSTRUCTIONS:
-  1. ALWAYS use 'flowchart TD' or 'flowchart LR' (or sequenceDiagram). NEVER use 'gantt' or 'gitGraph' (their syntax easily causes parsing crashes).
-  2. ALWAYS wrap node text in double quotes inside square brackets: nodeId["Label (Details)"] --> nextId["Next Label"].
-  3. Keep node labels short and concise. Do NOT use unquoted parentheses, unquoted colons, or HTML tags inside node text.`;
+Rules:
+1. Grounding: Answer strictly using facts from the Sources. If the sources do not contain sufficient information to answer the question, state clearly that the information is not available in the provided documents. Never speculate or extrapolate.
+2. Inline Citations: Include inline bracket citations (e.g., [1], [2]) directly after claims, referencing the numbered sources.
+3. Conciseness: Be direct, clear, and structured (using bullet points or concise paragraphs). Do not generate diagrams or code blocks unless the user explicitly requests one.`;
 
 function buildMistralMessages(
   systemPrompt: string,
@@ -90,39 +85,19 @@ async function* streamMistralChatCompletion(
 
   const messages = buildMistralMessages(systemPrompt, history, question, contextText);
 
-  const modelsToTry = [
-    "open-mistral-nemo",
-    "mistral-small-latest",
-    "ministral-8b-latest",
-    "mistral-large-latest",
-  ];
+  const stream = await client.chat.stream({
+    model: "mistral-small-latest",
+    messages,
+    temperature: 0.5,
+    maxTokens: 10000,
+    safePrompt: true,
+  });
 
-  let lastError: unknown = null;
-  for (const model of modelsToTry) {
-    try {
-      const stream = await client.chat.stream({
-        model,
-        messages,
-        temperature: 0.5,
-        maxTokens: 10000,
-        safePrompt: true,
-      });
-
-      for await (const chunk of stream) {
-        const delta = chunk.data?.choices?.[0]?.delta?.content;
-        if (typeof delta === "string" && delta) {
-          yield delta;
-        }
-      }
-      return;
-    } catch (err) {
-      lastError = err;
-      console.warn(`[Mistral Stream] Model ${model} failed:`, err);
+  for await (const chunk of stream) {
+    const delta = chunk.data?.choices?.[0]?.delta?.content;
+    if (typeof delta === "string" && delta) {
+      yield delta;
     }
-  }
-
-  if (lastError) {
-    throw lastError;
   }
 }
 
@@ -140,39 +115,16 @@ async function callMistralChatCompletion(
 
   const messages = buildMistralMessages(systemPrompt, history, question, contextText);
 
-  const modelsToTry = [
-    "open-mistral-nemo",
-    "mistral-small-latest",
-    "ministral-8b-latest",
-    "mistral-large-latest",
-  ];
-  let lastError: unknown = null;
+  const response = await client.chat.complete({
+    model: "mistral-small-latest",
+    messages,
+    temperature: 0.5,
+    maxTokens: 10000,
+    safePrompt: true,
+  });
 
-  for (const model of modelsToTry) {
-    try {
-      const response = await client.chat.complete({
-        model,
-        messages,
-        temperature: 0.5,
-        maxTokens: 10000,
-        safePrompt: true,
-      });
-
-      const content = response.choices?.[0]?.message?.content;
-      if (typeof content === "string" && content.trim()) {
-        return content.trim();
-      }
-    } catch (err) {
-      lastError = err;
-      console.warn(`[Mistral] Model ${model} failed:`, err);
-    }
-  }
-
-  if (lastError) {
-    throw lastError;
-  }
-
-  return "";
+  const content = response.choices?.[0]?.message?.content;
+  return typeof content === "string" ? content.trim() : "";
 }
 
 

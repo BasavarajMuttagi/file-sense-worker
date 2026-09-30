@@ -27,7 +27,7 @@ flowchart TB
     end
 
     subgraph AILayer["AI & LLM Services"]
-        Mistral["Mistral AI (Multi-Model Fallback Cascade)"]
+        Mistral["Mistral AI (mistral-small-latest)"]
     end
 
     subgraph ComputeLayer["Serverless Compute Sandbox (Upstash Ephemeral Box)"]
@@ -66,7 +66,7 @@ flowchart TB
 | **Compute Sandbox** | [Upstash Box](https://upstash.com/docs/box) (`@upstash/box`) | Serverless on-demand Ephemeral Box (small, 10 min TTL) with auto-destruction and explicit cleanup |
 | **Vector Database** | [Upstash Vector](https://upstash.com/docs/vector/overall) | Serverless vector database with built-in hybrid search (Dense + BM25) and metadata filtering |
 | **Validation** | [Zod](https://zod.dev/) | Request body, query string, and route parameter validation |
-| **LLM Inference** | Mistral AI (`@mistralai/mistralai`) | Multi-model fallback cascade (`open-mistral-nemo` → `mistral-small-latest` → `ministral-8b-latest` → `mistral-large-latest`) |
+| **LLM Inference** | Mistral AI (`@mistralai/mistralai`) | Direct synthesis via `mistral-small-latest` with strict grounding & inline citations |
 | **Testing** | [Vitest](https://vitest.dev/) (`v5`) | Hermetic, fast in-memory test suite adhering to Hono testing conventions (`app.request`) |
 
 ---
@@ -274,15 +274,11 @@ sequenceDiagram
 
     %% Step 4: Upstash Ephemeral Box Execution
     Note over Box: Provisions isolated Ephemeral Box (small, 10 min TTL)
-    Webhook->>Box: EphemeralBox.create({ env: secrets })
+    Webhook->>Box: EphemeralBox.create({ env: secrets & parameters })
     Box->>Tigris: Download file via presigned GET URL
-    alt Sarvam API Key Present
-        Box->>Sarvam: POST /digitise -> poll status -> extract pages
-    else Local Fallback
-        Box->>Box: Native PDF parse & token extraction
-    end
-    Box->>Box: Chunk text with page and index metadata
-    Box->>Upstash: Batch upsert chunks with metadata
+    Box->>Sarvam: POST /digitise -> poll status -> extract pages (JSON format)
+    Box->>Box: Chunk text with page and index metadata (25% overlap)
+    Box->>Upstash: Batch upsert chunks with metadata (native SDK retries)
     Box->>Turso: UPDATE documents SET status = "processed", chunkCount = N
     Note over Box: box.delete() deletes container immediately upon completion
 ```
@@ -291,7 +287,7 @@ sequenceDiagram
 
 ### 5.3 RAG Question & Answer Flow
 
-When a user submits a question, the Worker evaluates conversational greetings, enriches follow-ups if needed, queries the vector database using hybrid fusion, and synthesizes answers with a multi-model fallback cascade.
+When a user submits a question, the Worker evaluates conversational greetings, enriches follow-ups if needed, queries the vector database using hybrid fusion, and synthesizes answers using **Mistral AI (`mistral-small-latest`)** with strict source grounding and inline citations.
 
 ```mermaid
 sequenceDiagram
@@ -299,7 +295,7 @@ sequenceDiagram
     actor Client
     participant Worker as Cloudflare Worker (/queries)
     participant Upstash as Upstash Vector
-    participant Mistral as Mistral AI (Fallback Cascade)
+    participant Mistral as Mistral AI (mistral-small-latest)
     participant Turso as Turso DB
 
     Client->>Worker: POST /queries { question, projectId?, sessionId?, stream? }
@@ -316,11 +312,9 @@ sequenceDiagram
         Worker->>Upstash: query({ topK: 15, fusionAlgorithm: DBSF, filter })
         Upstash-->>Worker: Matched chunks (scores, metadata, text snippets)
 
-        %% Multi-Model LLM Synthesis
+        %% Direct LLM Synthesis
         alt Chunks Found & MISTRAL_API_KEY present
-            loop Model Fallback Cascade
-                Worker->>Mistral: Try open-mistral-nemo -> mistral-small -> ministral-8b -> mistral-large
-            end
+            Worker->>Mistral: Synthesize answer (model: "mistral-small-latest")
             alt stream = true
                 Worker-->>Client: SSE Streaming response (text/event-stream)
             else Standard JSON
@@ -386,8 +380,8 @@ All environment variables and secrets are accessed in Hono handlers via `c.env`:
 | `TIGRIS_BUCKET_NAME` | Fallback S3 bucket name |
 | `UPSTASH_VECTOR_REST_URL` | Upstash Vector REST endpoint URL |
 | `UPSTASH_VECTOR_REST_TOKEN` | Upstash Vector REST authentication token |
-| `MISTRAL_API_KEY` | Mistral AI API key for multi-model fallback cascade (`open-mistral-nemo` → `mistral-small-latest` → `ministral-8b-latest` → `mistral-large-latest`) |
-| `SARVAM_API_KEY` | (Optional) Sarvam AI key for document OCR/digitization |
+| `MISTRAL_API_KEY` | Mistral AI API key for RAG answer synthesis (`mistral-small-latest`) |
+| `SARVAM_API_KEY` | Sarvam AI key for document OCR/digitization |
 | `UPSTASH_BOX_API_KEY` | (Optional) Upstash Box API key for on-demand Ephemeral Box OCR & chunking |
 
 ---
