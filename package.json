@@ -6,7 +6,9 @@
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "types": "wrangler types",
-    "secrets:upload": "node scripts/upload-secrets.mjs"
+    "secrets:upload": "node scripts/upload-secrets.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@clerk/hono": "^0.1.76",
@@ -25,6 +27,7 @@
     "@types/node": "^25.9.5",
     "drizzle-kit": "^1.0.0-rc.4",
     "typescript": "^7.0.2",
+    "vitest": "^5.0.2",
     "wrangler": "^4.129.0"
   }
 }

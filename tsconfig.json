@@ -18,6 +18,6 @@
     "lib": ["es2024"],
     "types": ["./worker-configuration.d.ts", "@types/node", "node"]
   },
-  "exclude": ["node_modules", "dist", "tests"],
-  "include": ["src", "worker-configuration.d.ts", "drizzle.config.ts"]
+  "exclude": ["node_modules", "dist"],
+  "include": ["src", "tests", "worker-configuration.d.ts", "drizzle.config.ts", "vitest.config.mts"]
 }
