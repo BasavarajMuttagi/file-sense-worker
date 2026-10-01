@@ -354,7 +354,8 @@ queriesRoute.post("/", async (c) => {
   // 2. Context Continuity at Page Boundaries:
   // If a high-confidence chunk is the last chunk of a page, check if the first chunk of the next page is in top-15
   const candidateIds = new Set(candidateChunks.map((c) => c.id));
-  for (const chunk of [...candidateChunks]) {
+  const initialCandidates = candidateChunks.slice();
+  for (const chunk of initialCandidates) {
     if (chunk.isLastChunkOfPage && chunk.docId) {
       const nextPage = chunk.page + 1;
       const nextPageFirstChunk = retrievedChunks.find(

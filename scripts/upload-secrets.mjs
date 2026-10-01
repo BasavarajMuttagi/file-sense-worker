@@ -50,7 +50,7 @@ if (secrets.length === 0) {
 console.log(`🔐 Found ${secrets.length} variables in .env to upload to Cloudflare Secrets...\n`);
 
 async function putSecret(key, value) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     process.stdout.write(`⏳ Uploading ${key}... `);
 
     const child = spawn("npx", ["wrangler", "secret", "put", key], {

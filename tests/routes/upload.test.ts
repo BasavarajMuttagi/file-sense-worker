@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MOCK_ENV } from "../fixtures/mock-env.js";
 import { resetMockUser, setMockUser } from "../helpers/auth.js";
-import { createMockDb } from "../helpers/db.js";
+import { createChainable, createMockDb } from "../helpers/db.js";
 
 vi.mock("../../src/db/index.js", () => ({
   getDb: vi.fn(),
@@ -31,11 +31,11 @@ describe("Upload Route: /api/upload", () => {
     resetMockUser();
 
     mockDb = createMockDb();
-    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+    vi.mocked(getDb).mockReturnValue(mockDb);
     vi.mocked(handleClientUpload).mockResolvedValue({
-      url: "https://upload.url",
-      fields: {},
-    } as unknown as Awaited<ReturnType<typeof handleClientUpload>>);
+      data: { url: "https://upload.url" },
+      error: undefined,
+    });
   });
 
   it("returns 401 Unauthorized if unauthenticated", async () => {
@@ -69,11 +69,7 @@ describe("Upload Route: /api/upload", () => {
   });
 
   it("returns 404 if project not found for current user", async () => {
-    mockDb.select.mockReturnValue({
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockResolvedValue([]),
-    });
+    mockDb.select.mockReturnValue(createChainable([]));
 
     const res = await app.request(
       "/api/upload",
@@ -89,11 +85,7 @@ describe("Upload Route: /api/upload", () => {
   });
 
   it("formats storage key and calls handleClientUpload on success", async () => {
-    mockDb.select.mockReturnValue({
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockResolvedValue([{ id: "proj_123" }]),
-    });
+    mockDb.select.mockReturnValue(createChainable([{ id: "proj_123" }]));
 
     const res = await app.request(
       "/api/upload",
@@ -123,11 +115,7 @@ describe("Upload Route: /api/upload", () => {
   });
 
   it("does not forward unvalidated arbitrary fields to handleClientUpload", async () => {
-    mockDb.select.mockReturnValue({
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockResolvedValue([{ id: "proj_123" }]),
-    });
+    mockDb.select.mockReturnValue(createChainable([{ id: "proj_123" }]));
 
     const res = await app.request(
       "/api/upload",

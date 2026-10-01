@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MOCK_ENV } from "../fixtures/mock-env.js";
 import { resetMockUser, setMockUser } from "../helpers/auth.js";
-import { createMockDb } from "../helpers/db.js";
+import { createChainable, createMockDb } from "../helpers/db.js";
 
 vi.mock("../../src/db/index.js", () => ({
   getDb: vi.fn(),
@@ -49,7 +49,7 @@ describe("Queries Route: /queries", () => {
     resetMockUser();
 
     mockDb = createMockDb();
-    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+    vi.mocked(getDb).mockReturnValue(mockDb);
   });
 
   describe("POST /queries", () => {
@@ -86,11 +86,7 @@ describe("Queries Route: /queries", () => {
     });
 
     it("returns 404 if specified projectId does not exist", async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([]),
-      });
+      mockDb.select.mockReturnValue(createChainable([]));
 
       const res = await app.request(
         "/queries",
@@ -111,9 +107,8 @@ describe("Queries Route: /queries", () => {
     });
 
     it("handles conversational greetings directly without vector search error", async () => {
-      mockDb.insert.mockReturnValue({
-        values: vi.fn().mockReturnThis(),
-        returning: vi.fn().mockResolvedValue([
+      mockDb.insert.mockReturnValue(
+        createChainable([
           {
             id: "query_greeting_1",
             question: "hello!",
@@ -121,7 +116,7 @@ describe("Queries Route: /queries", () => {
             sources: [],
           },
         ]),
-      });
+      );
 
       const res = await app.request(
         "/queries",
@@ -173,11 +168,7 @@ describe("Queries Route: /queries", () => {
         },
       ];
 
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        orderBy: vi.fn().mockResolvedValue(sampleQueries),
-      });
+      mockDb.select.mockReturnValue(createChainable(sampleQueries));
 
       const res = await app.request(
         "/queries/sessions?projectId=proj_123",
@@ -197,11 +188,7 @@ describe("Queries Route: /queries", () => {
 
   describe("GET /queries/:id", () => {
     it("returns 404 if query record not found", async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([]),
-      });
+      mockDb.select.mockReturnValue(createChainable([]));
 
       const res = await app.request("/queries/nonexistent_query", {}, MOCK_ENV);
       expect(res.status).toBe(404);
@@ -216,11 +203,7 @@ describe("Queries Route: /queries", () => {
         answer: "This is a summary.",
       };
 
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([record]),
-      });
+      mockDb.select.mockReturnValue(createChainable([record]));
 
       const res = await app.request("/queries/query_123", {}, MOCK_ENV);
       expect(res.status).toBe(200);

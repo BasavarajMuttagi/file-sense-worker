@@ -53,9 +53,12 @@ describe("Storage Service", () => {
   describe("getStoragePresignedDownloadUrl", () => {
     it("returns presigned URL when Tigris returns data successfully", async () => {
       vi.mocked(getPresignedUrl).mockResolvedValueOnce({
-        data: { url: "https://t3.storage.dev/download/file.pdf?token=xyz" },
-        error: null,
-      } as unknown as Awaited<ReturnType<typeof getPresignedUrl>>);
+        data: {
+          url: "https://t3.storage.dev/download/file.pdf?token=xyz",
+          expiresIn: 3600,
+        } as any,
+        error: undefined,
+      });
 
       const url = await getStoragePresignedDownloadUrl("file.pdf", {
         TIGRIS_STORAGE_BUCKET: "my-bucket",
@@ -75,9 +78,9 @@ describe("Storage Service", () => {
 
     it("returns null when Tigris returns an error", async () => {
       vi.mocked(getPresignedUrl).mockResolvedValueOnce({
-        data: null,
-        error: "Bucket not found",
-      } as unknown as Awaited<ReturnType<typeof getPresignedUrl>>);
+        data: undefined,
+        error: new Error("Bucket not found") as any,
+      });
 
       const url = await getStoragePresignedDownloadUrl("file.pdf", {});
       expect(url).toBeNull();
@@ -97,8 +100,8 @@ describe("Storage Service", () => {
     it("calls remove on Tigris storage client and returns response", async () => {
       vi.mocked(remove).mockResolvedValueOnce({
         data: { success: true },
-        error: null,
-      } as unknown as Awaited<ReturnType<typeof remove>>);
+        error: undefined,
+      } as any);
 
       const res = await removeStorageObject("folder/file.pdf", {
         TIGRIS_STORAGE_BUCKET: "my-bucket",
@@ -110,7 +113,7 @@ describe("Storage Service", () => {
           config: expect.objectContaining({ bucket: "my-bucket" }),
         }),
       );
-      expect(res).toEqual({ data: { success: true }, error: null });
+      expect(res).toEqual({ data: { success: true }, error: undefined });
     });
 
     it("catches exception and returns null", async () => {

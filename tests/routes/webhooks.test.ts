@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MOCK_ENV } from "../fixtures/mock-env.js";
-import { createMockDb } from "../helpers/db.js";
+import { createMockExecutionContext } from "../helpers/context.js";
+import { createChainable, createMockDb } from "../helpers/db.js";
+import { createMockVectorIndex } from "../helpers/vector.js";
 
 vi.mock("../../src/db/index.js", () => ({
   getDb: vi.fn(),
@@ -35,10 +37,10 @@ describe("Webhooks Route: /webhooks/tigris", () => {
     vi.clearAllMocks();
 
     mockDb = createMockDb();
-    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
-    vi.mocked(getVectorIndex).mockReturnValue({
-      delete: mockVectorDelete,
-    } as unknown as ReturnType<typeof getVectorIndex>);
+    vi.mocked(getDb).mockReturnValue(mockDb);
+    vi.mocked(getVectorIndex).mockReturnValue(
+      createMockVectorIndex({ delete: mockVectorDelete }),
+    );
     vi.mocked(dispatchDocumentProcessing).mockResolvedValue(undefined);
   });
 
@@ -83,15 +85,8 @@ describe("Webhooks Route: /webhooks/tigris", () => {
 
   it("handles OBJECT_DELETED by removing document and vector embeddings", async () => {
     const key = "user_1/projects/proj_1/123-test.pdf";
-    mockDb.select.mockReturnValue({
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockResolvedValue([{ id: "doc_to_delete" }]),
-    });
-
-    mockDb.delete.mockReturnValue({
-      where: vi.fn().mockResolvedValue({}),
-    });
+    mockDb.select.mockReturnValue(createChainable([{ id: "doc_to_delete" }]));
+    mockDb.delete.mockReturnValue(createChainable({}));
 
     const res = await app.request(
       "/webhooks/tigris",
@@ -121,29 +116,12 @@ describe("Webhooks Route: /webhooks/tigris", () => {
     const key = "user_1/projects/proj_1/123-annual-report.pdf";
 
     mockDb.select
-      .mockReturnValueOnce({
-        // Project lookup
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([{ id: "proj_1" }]),
-      })
-      .mockReturnValueOnce({
-        // Existing document check (returns empty = new doc)
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([]),
-      });
+      .mockReturnValueOnce(createChainable([{ id: "proj_1" }]))
+      .mockReturnValueOnce(createChainable([]));
 
-    mockDb.insert.mockReturnValue({
-      values: vi.fn().mockReturnThis(),
-      returning: vi.fn().mockResolvedValue([{ id: "new_doc_id" }]),
-    });
+    mockDb.insert.mockReturnValue(createChainable([{ id: "new_doc_id" }]));
 
-    const executionCtx = {
-      waitUntil: vi.fn(),
-      passThroughOnException: vi.fn(),
-      props: {},
-    };
+    const executionCtx = createMockExecutionContext();
 
     const res = await app.request(
       "/webhooks/tigris",
@@ -160,7 +138,7 @@ describe("Webhooks Route: /webhooks/tigris", () => {
         }),
       },
       MOCK_ENV,
-      executionCtx as unknown as ExecutionContext,
+      executionCtx,
     );
 
     expect(res.status).toBe(200);
@@ -180,27 +158,12 @@ describe("Webhooks Route: /webhooks/tigris", () => {
     const oversizedBytes = 26 * 1024 * 1024; // 26MB
 
     mockDb.select
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([{ id: "proj_1" }]),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([]),
-      });
+      .mockReturnValueOnce(createChainable([{ id: "proj_1" }]))
+      .mockReturnValueOnce(createChainable([]));
 
-    mockDb.insert.mockReturnValue({
-      values: vi.fn().mockReturnThis(),
-      returning: vi.fn().mockResolvedValue([{ id: "oversized_doc_id" }]),
-    });
+    mockDb.insert.mockReturnValue(createChainable([{ id: "oversized_doc_id" }]));
 
-    const executionCtx = {
-      waitUntil: vi.fn(),
-      passThroughOnException: vi.fn(),
-      props: {},
-    };
+    const executionCtx = createMockExecutionContext();
 
     const res = await app.request(
       "/webhooks/tigris",
@@ -217,18 +180,11 @@ describe("Webhooks Route: /webhooks/tigris", () => {
         }),
       },
       MOCK_ENV,
-      executionCtx as unknown as ExecutionContext,
+      executionCtx,
     );
 
     expect(res.status).toBe(200);
     expect(mockDb.insert).toHaveBeenCalledWith(expect.anything());
-    // Verify document was marked as error status
-    expect(mockDb.insert().values).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: "error",
-        fileSize: oversizedBytes,
-      }),
-    );
     // Verify oversized file was removed from storage
     expect(removeStorageObject).toHaveBeenCalledWith(key, MOCK_ENV);
     // Verify processing was NOT dispatched

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MOCK_ENV } from "../fixtures/mock-env.js";
 import { resetMockUser, setMockUser } from "../helpers/auth.js";
 import { createChainable, createMockDb } from "../helpers/db.js";
+import { createMockVectorIndex } from "../helpers/vector.js";
 
 vi.mock("../../src/db/index.js", () => ({
   getDb: vi.fn(),
@@ -32,10 +33,10 @@ describe("Projects Route: /projects", () => {
     resetMockUser();
 
     mockDb = createMockDb();
-    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
-    vi.mocked(getVectorIndex).mockReturnValue({
-      delete: mockVectorDelete,
-    } as unknown as ReturnType<typeof getVectorIndex>);
+    vi.mocked(getDb).mockReturnValue(mockDb);
+    vi.mocked(getVectorIndex).mockReturnValue(
+      createMockVectorIndex({ delete: mockVectorDelete }),
+    );
     vi.mocked(removeStorageObject).mockResolvedValue({ data: undefined, error: undefined });
   });
 
@@ -82,11 +83,7 @@ describe("Projects Route: /projects", () => {
         description: "Desc",
       };
 
-      const chain = {
-        values: vi.fn().mockReturnThis(),
-        returning: vi.fn().mockResolvedValue([createdProject]),
-      };
-      mockDb.insert.mockReturnValue(chain);
+      mockDb.insert.mockReturnValue(createChainable([createdProject]));
 
       const res = await app.request(
         "/projects",
@@ -124,14 +121,7 @@ describe("Projects Route: /projects", () => {
         },
       ];
 
-      const chain = {
-        from: vi.fn().mockReturnThis(),
-        leftJoin: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        groupBy: vi.fn().mockReturnThis(),
-        orderBy: vi.fn().mockResolvedValue(projectList),
-      };
-      mockDb.select.mockReturnValue(chain);
+      mockDb.select.mockReturnValue(createChainable(projectList));
 
       const res = await app.request("/projects", {}, MOCK_ENV);
       expect(res.status).toBe(200);
@@ -142,12 +132,7 @@ describe("Projects Route: /projects", () => {
 
   describe("GET /projects/:id", () => {
     it("returns 404 Not Found if project does not exist", async () => {
-      const selectChain = {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([]),
-      };
-      mockDb.select.mockReturnValue(selectChain);
+      mockDb.select.mockReturnValue(createChainable([]));
 
       const res = await app.request("/projects/nonexistent", {}, MOCK_ENV);
       expect(res.status).toBe(404);
@@ -160,16 +145,8 @@ describe("Projects Route: /projects", () => {
       const docs = [{ id: "doc_1", fileName: "test.pdf" }];
 
       mockDb.select
-        .mockReturnValueOnce({
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([project]),
-        })
-        .mockReturnValueOnce({
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          orderBy: vi.fn().mockResolvedValue(docs),
-        });
+        .mockReturnValueOnce(createChainable([project]))
+        .mockReturnValueOnce(createChainable(docs));
 
       const res = await app.request("/projects/proj_123", {}, MOCK_ENV);
       expect(res.status).toBe(200);
@@ -180,12 +157,7 @@ describe("Projects Route: /projects", () => {
 
   describe("DELETE /projects/:id", () => {
     it("returns 404 if project to delete does not exist", async () => {
-      const selectChain = {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([]),
-      };
-      mockDb.select.mockReturnValue(selectChain);
+      mockDb.select.mockReturnValue(createChainable([]));
 
       const res = await app.request(
         "/projects/proj_missing",
@@ -203,9 +175,7 @@ describe("Projects Route: /projects", () => {
         .mockReturnValueOnce(createChainable([project]))
         .mockReturnValueOnce(createChainable(docs));
 
-      mockDb.delete.mockReturnValue({
-        where: vi.fn().mockResolvedValue({}),
-      });
+      mockDb.delete.mockReturnValue(createChainable({}));
 
       const res = await app.request(
         "/projects/proj_123",

@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MOCK_ENV } from "../fixtures/mock-env.js";
 import { resetMockUser, setMockUser } from "../helpers/auth.js";
-import { createMockDb } from "../helpers/db.js";
+import { createChainable, createMockDb } from "../helpers/db.js";
+import { createMockVectorIndex } from "../helpers/vector.js";
 
 vi.mock("../../src/db/index.js", () => ({
   getDb: vi.fn(),
@@ -44,10 +45,10 @@ describe("Documents Route: /documents", () => {
     resetMockUser();
 
     mockDb = createMockDb();
-    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
-    vi.mocked(getVectorIndex).mockReturnValue({
-      delete: mockVectorDelete,
-    } as unknown as ReturnType<typeof getVectorIndex>);
+    vi.mocked(getDb).mockReturnValue(mockDb);
+    vi.mocked(getVectorIndex).mockReturnValue(
+      createMockVectorIndex({ delete: mockVectorDelete }),
+    );
     vi.mocked(removeStorageObject).mockResolvedValue({ data: undefined, error: undefined });
   });
 
@@ -59,12 +60,7 @@ describe("Documents Route: /documents", () => {
     });
 
     it("returns 404 if document does not exist", async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnThis(),
-        innerJoin: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([]),
-      });
+      mockDb.select.mockReturnValue(createChainable([]));
 
       const res = await app.request("/documents/nonexistent", {}, MOCK_ENV);
       expect(res.status).toBe(404);
@@ -73,14 +69,9 @@ describe("Documents Route: /documents", () => {
     });
 
     it("returns 403 Access denied if document belongs to another user", async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnThis(),
-        innerJoin: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([
-          { id: "doc_1", projectUserId: "other_user_456" },
-        ]),
-      });
+      mockDb.select.mockReturnValue(
+        createChainable([{ id: "doc_1", projectUserId: "other_user_456" }]),
+      );
 
       const res = await app.request("/documents/doc_1", {}, MOCK_ENV);
       expect(res.status).toBe(403);
@@ -97,12 +88,7 @@ describe("Documents Route: /documents", () => {
         projectUserId: "user_test_123",
       };
 
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnThis(),
-        innerJoin: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([docData]),
-      });
+      mockDb.select.mockReturnValue(createChainable([docData]));
 
       const res = await app.request("/documents/doc_1", {}, MOCK_ENV);
       expect(res.status).toBe(200);
@@ -114,11 +100,7 @@ describe("Documents Route: /documents", () => {
 
   describe("GET /documents/project/:projectId", () => {
     it("returns 404 if project not found for current user", async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([]),
-      });
+      mockDb.select.mockReturnValue(createChainable([]));
 
       const res = await app.request(
         "/documents/project/missing_proj",
@@ -135,16 +117,8 @@ describe("Documents Route: /documents", () => {
       ];
 
       mockDb.select
-        .mockReturnValueOnce({
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([{ id: "proj_1" }]),
-        })
-        .mockReturnValueOnce({
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          orderBy: vi.fn().mockResolvedValue(docs),
-        });
+        .mockReturnValueOnce(createChainable([{ id: "proj_1" }]))
+        .mockReturnValueOnce(createChainable(docs));
 
       const res = await app.request(
         "/documents/project/proj_1",
@@ -159,12 +133,7 @@ describe("Documents Route: /documents", () => {
 
   describe("DELETE /documents/:id", () => {
     it("returns 404 if document does not exist", async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnThis(),
-        innerJoin: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([]),
-      });
+      mockDb.select.mockReturnValue(createChainable([]));
 
       const res = await app.request(
         "/documents/missing_doc",
@@ -175,14 +144,9 @@ describe("Documents Route: /documents", () => {
     });
 
     it("returns 403 if document belongs to someone else", async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnThis(),
-        innerJoin: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([
-          { id: "doc_1", projectUserId: "someone_else" },
-        ]),
-      });
+      mockDb.select.mockReturnValue(
+        createChainable([{ id: "doc_1", projectUserId: "someone_else" }]),
+      );
 
       const res = await app.request(
         "/documents/doc_1",
@@ -193,22 +157,17 @@ describe("Documents Route: /documents", () => {
     });
 
     it("deletes storage object, vectors, and db record on success", async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnThis(),
-        innerJoin: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([
+      mockDb.select.mockReturnValue(
+        createChainable([
           {
             id: "doc_1",
             storageUrl: "user_test_123/projects/proj1/doc1.pdf",
             projectUserId: "user_test_123",
           },
         ]),
-      });
+      );
 
-      mockDb.delete.mockReturnValue({
-        where: vi.fn().mockResolvedValue({}),
-      });
+      mockDb.delete.mockReturnValue(createChainable({}));
 
       const res = await app.request(
         "/documents/doc_1",
