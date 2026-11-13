@@ -20,7 +20,7 @@
     "@upstash/vector": "^1.2.3",
     "drizzle-orm": "^1.0.0-rc.4",
     "hono": "^4.12.12",
-    "sarvamai": "^1.1.9",
+    "sarvamai": "^1.1.18",
     "zod": "^4.3.6"
   },
   "devDependencies": {

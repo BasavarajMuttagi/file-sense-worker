@@ -150,11 +150,10 @@ async function callSarvamDigitize(buffer, fileName, mimeType, apiKey) {
   let jobId;
 
   try {
-    const digitiseRes = await sarvam.docAi.digitise({
+    const parseRes = await sarvam.docAi.parse({
       file: [nodeFs.createReadStream(tempPath)],
-      output_format: "json",
     });
-    jobId = digitiseRes.job_id;
+    jobId = parseRes.job_id;
   } finally {
     await fs.unlink(tempPath).catch(() => {});
   }
@@ -180,7 +179,7 @@ async function callSarvamDigitize(buffer, fileName, mimeType, apiKey) {
     }
   }
 
-  const resultsData = await sarvam.docAi.getResults(jobId, { format: "json" });
+  const resultsData = await sarvam.docAi.getResults(jobId);
   console.log(\`[Upstash Box] Sarvam OCR completed for job: \${jobId}\`);
 
   const rawPages = [];
@@ -201,6 +200,10 @@ async function callSarvamDigitize(buffer, fileName, mimeType, apiKey) {
     if (!p) continue;
     const pageNum = p.page_num ?? p.page_number ?? i + 1;
     let pageText = (typeof p.text === "string" && p.text.trim()) ? p.text.trim() : "";
+
+    if (!pageText && typeof p.content === "string" && p.content.trim()) {
+      pageText = p.content.trim();
+    }
 
     if (!pageText && Array.isArray(p.blocks)) {
       const parts = [];
@@ -227,7 +230,6 @@ async function callSarvamDigitize(buffer, fileName, mimeType, apiKey) {
 
   return parsedPages;
 }
-
 function normalizePages(pages) {
   const normalized = [];
   const TARGET_PAGE_CHARS = 3000;

@@ -78,7 +78,7 @@ export async function dispatchDocumentProcessing(
           name: "filesense-box-runner",
           type: "module",
           dependencies: {
-            sarvamai: "^1.1.9",
+            sarvamai: "^1.1.18",
             "@upstash/vector": "^1.2.3",
             "@libsql/client": "^0.18.0",
           },
